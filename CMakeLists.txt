@@ -106,5 +106,10 @@ if(TERMESH_BUILD_TESTS)
         tests/test_scene.cpp
     )
     target_link_libraries(termesh_tests PRIVATE termesh_core termesh_warnings)
+    # doctest includes <ciso646> under Clang, which newer libstdc++ flags with
+    # a #warning in C++20. It is harmless and not ours to fix.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(termesh_tests PRIVATE -Wno-\#warnings)
+    endif()
     add_test(NAME termesh_tests COMMAND termesh_tests)
 endif()

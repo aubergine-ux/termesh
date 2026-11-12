@@ -268,7 +268,7 @@ TEST_CASE("lines: an edge is an unbroken run of pixels, one per step along its m
 TEST_CASE("lines: shared edges, edge flags, width and tiling") {
     // Two triangles sharing the edge p-q, described in opposite directions.
     const ScreenVertex p{10.3f, 12.7f}, q{50.1f, 41.2f};
-    RasterTriangle left, right;
+    RasterTriangle left{}, right{};
     REQUIRE(makeTriangle(p, q, {12.0f, 50.0f}, left));
     REQUIRE(makeTriangle(q, p, {52.0f, 8.0f}, right));
     const TestShader shader;
