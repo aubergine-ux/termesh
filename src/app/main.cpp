@@ -57,6 +57,7 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
     // Spin the same way as the interactive viewer; a negative speed reverses.
     const float direction = options.spinSpeed < 0.0f ? -1.0f : 1.0f;
 
+    const bool progress = Terminal::errorIsTerminal();
     std::vector<Image> frames;
     frames.reserve(static_cast<std::size_t>(options.frames));
     for (int i = 0; i < options.frames; ++i) {
@@ -64,10 +65,10 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
         // joins up without a repeated frame.
         camera.yaw = startYaw + direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(options.frames);
         frames.push_back(renderOffscreen(renderer, pool, model, camera, settings, target));
-        std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, options.frames);
+        if (progress) std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, options.frames);
     }
 
-    std::fprintf(stderr, "\rencoding...                 ");
+    if (progress) std::fprintf(stderr, "\rencoding...                 \r");
     const GifPalette palette = buildGifPalette(frames);
     GifWriter writer;
     // GIF delays are whole hundredths of a second.
@@ -76,10 +77,10 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
     for (const Image& frame : frames) ok = ok && writer.addFrame(frame);
     ok = writer.close() && ok;
     if (!ok) {
-        std::fprintf(stderr, "\rtermesh: could not write '%s'\n", options.gifPath.c_str());
+        std::fprintf(stderr, "termesh: could not write '%s'\n", options.gifPath.c_str());
         return 1;
     }
-    std::fprintf(stderr, "\rwrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width,
+    std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width,
                  frames[0].height, options.frames);
     return 0;
 }

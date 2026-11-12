@@ -26,6 +26,7 @@ public:
 
     static bool inputIsTerminal();
     static bool outputIsTerminal();
+    static bool errorIsTerminal();
 
     // Switch input to raw mode: no echo, no line buffering, keys delivered
     // as they are pressed. Returns false if stdin / stdout is not a terminal.

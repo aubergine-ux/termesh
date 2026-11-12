@@ -58,6 +58,7 @@ Terminal::~Terminal() {
 
 bool Terminal::inputIsTerminal() { return _isatty(_fileno(stdin)) != 0; }
 bool Terminal::outputIsTerminal() { return _isatty(_fileno(stdout)) != 0; }
+bool Terminal::errorIsTerminal() { return _isatty(_fileno(stderr)) != 0; }
 bool Terminal::quitRequested() { return g_quit.load(); }
 
 bool Terminal::enterRawMode() {
