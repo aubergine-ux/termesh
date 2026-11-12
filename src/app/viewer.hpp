@@ -1,0 +1,95 @@
+// The interactive viewer: input handling, the frame loop and the status bar.
+#pragma once
+
+#include <chrono>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "app/capabilities.hpp"
+#include "app/options.hpp"
+#include "core/image.hpp"
+#include "input/events.hpp"
+#include "input/terminal.hpp"
+#include "output/backend.hpp"
+#include "pipeline/renderer.hpp"
+#include "scene/camera.hpp"
+#include "scene/model.hpp"
+
+namespace termesh {
+
+class Viewer {
+public:
+    Viewer(const Options& options, const Model& model, ThreadPool& pool);
+
+    // Runs until the user quits. Returns the process exit code.
+    int run();
+
+private:
+    using Clock = std::chrono::steady_clock;
+
+    // --- input ---
+    void handleEvent(const InputEvent& event);
+    void handleKey(const KeyEvent& key);
+    void handleMouse(const MouseEvent& mouse);
+
+    // --- output ---
+    BackendKind effectiveBackend() const;
+    void rebuildBackend();   // (re)create the backend for the current mode
+    void layout();           // recompute sizes after a resize or mode change
+    void drawFrame();
+    void drawStatusBar(std::string& out);
+    void drawHelp(std::string& out);
+    void saveScreenshot();
+    void resetView();
+    void notify(std::string message);
+
+    const Options& options_;
+    const Model& model_;
+    ThreadPool& pool_;
+    Renderer renderer_;
+
+    Terminal terminal_;
+    InputParser parser_;
+    TerminalCaps caps_;
+    TerminalSize termSize_;
+
+    std::unique_ptr<Backend> backend_;
+    BackendKind baseBackend_ = BackendKind::HalfBlock;  // what the user selected
+    std::vector<BackendKind> available_;                 // for cycling with 'b'
+    DrawArea area_;
+    int imageWidth_ = 0, imageHeight_ = 0, supersampling_ = 1;
+    Framebuffer framebuffer_;
+    Image resolved_;
+
+    OrbitCamera camera_;
+    RenderSettings settings_;
+    float lightYaw_ = 0.0f;
+
+    bool running_ = true;
+    bool dirty_ = true;        // the picture needs redrawing
+    bool autoRotate_ = true;
+    bool showStats_ = true;
+    bool showHelp_ = false;
+    bool helpDrawn_ = false;
+
+    // Mouse drag state.
+    bool dragging_ = false;
+    int dragButton_ = 0;
+    int lastMouseCol_ = 0, lastMouseRow_ = 0;
+
+    // Timing and statistics.
+    Clock::time_point lastFrameTime_;
+    RenderStats stats_;
+    double presentMs_ = 0.0;
+    double fps_ = 0.0;
+    int framesSinceFpsUpdate_ = 0;
+    Clock::time_point fpsWindowStart_;
+    std::size_t bytesLastFrame_ = 0;
+
+    std::string message_;
+    Clock::time_point messageExpiry_;
+    std::string lastStatus_;
+};
+
+}  // namespace termesh
