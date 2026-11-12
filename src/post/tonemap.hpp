@@ -55,8 +55,9 @@ inline float toneMap(float x, ToneMapper mapper = ToneMapper::Aces) {
 // The default curve for a whole colour at once. This runs for every pixel of
 // every frame, and the three channels go through identical arithmetic, so
 // it is written with the same four-wide SIMD type the rasterizer uses: one
-// division instead of three. For any finite input the result is the same,
-// bit for bit, as calling toneMapAces on each channel.
+// division instead of three. The result is the same as calling toneMapAces
+// on each channel, to within the last bit or so (a compiler may fuse a
+// multiply and an add into one instruction in one version and not the other).
 inline Vec3 toneMapAces(Vec3 c) {
     using simd::Float4;
     const float in[4] = {c.x, c.y, c.z, 0.0f};

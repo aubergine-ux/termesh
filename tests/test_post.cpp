@@ -68,14 +68,17 @@ TEST_CASE("tone mapping: every curve is monotonic and stays in range") {
     CHECK(toneMap(1.0f, ToneMapper::Reinhard) == Approx(0.5f));
 }
 
-TEST_CASE("tone mapping: the SIMD curve for a whole colour matches the scalar one exactly") {
+TEST_CASE("tone mapping: the SIMD curve for a whole colour matches the scalar one") {
+    // To within rounding: one may be compiled with fused multiply-adds and
+    // the other without. Far less than one step of an 8-bit colour.
+    const auto same = [](float a, float b) { return std::abs(a - b) <= 4e-7f; };
     for (int i = 0; i <= 4000; ++i) {
         const float x = static_cast<float>(i) * 0.005f;  // 0 .. 20
         const Vec3 in{x, x * 0.37f + 0.01f, 20.0f - x};
         const Vec3 out = toneMapAces(in);
-        REQUIRE(out.x == toneMapAces(in.x));
-        REQUIRE(out.y == toneMapAces(in.y));
-        REQUIRE(out.z == toneMapAces(in.z));
+        REQUIRE(same(out.x, toneMapAces(in.x)));
+        REQUIRE(same(out.y, toneMapAces(in.y)));
+        REQUIRE(same(out.z, toneMapAces(in.z)));
         REQUIRE(toneMap(in) == out);  // ACES is the default
     }
     // Negative light is black, and nothing is brighter than white.
