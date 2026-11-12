@@ -1326,6 +1326,43 @@ pkg-config and a CMake package (`find_package(termesh)` gives the target
 `termesh::termesh`). The C API has its own test program, which links only
 the library and includes only `termesh.h`: it tests what clients get.
 
+## 28. The Python package
+
+`python/bindings.cpp` · `python/termesh/__init__.py` · `pyproject.toml` · [docs/python.md](docs/python.md)
+
+The Python module is written against `termesh.h` and nothing else. That is a
+choice: it could have reached into the C++ classes, but going through the C
+API makes it a second, demanding client of that interface (anything Python
+needs and cannot do is a hole in the API), and it means the binding cannot
+break when the engine's internals change.
+
+[pybind11](https://github.com/pybind/pybind11) generates the glue. What the
+binding adds is the difference between a C interface and a Python one:
+
+| C                                  | Python                                              |
+| ---------------------------------- | --------------------------------------------------- |
+| negative return + `termesh_last_error()` | an exception, `termesh.Error`                 |
+| `_create` / `_destroy` pairs       | objects, freed when the last reference goes         |
+| `const float*` + a count           | NumPy arrays, converted and shape-checked           |
+| a caller-allocated RGBA buffer     | a new `(height, width, 4)` array, written in place  |
+| numbered enums                     | names: `"pbr"`, `"braille"`                         |
+| column-major `float[16]`           | a 4 x 4 array as NumPy writes it (row-major)        |
+
+Two details matter for correctness. Arrays passed to `add_mesh` are
+converted to contiguous `float32` / `uint32` if they are not already, and
+the converted copies are held in local variables until the C call returns -
+the C struct only borrows their pointers. And rendering **releases the
+GIL**: a frame can take milliseconds or seconds, during which other Python
+threads run; that is safe because the C call touches no Python objects, and
+the output array is not visible to anyone else until it returns.
+
+The engine is linked into the extension module itself (the same object files
+as everything else), so the wheel contains one binary with no shared-library
+dependencies. `pyproject.toml` hands the build to scikit-build-core, which
+runs this project's CMake with `TERMESH_PYTHON=ON`; the version number is
+read out of `CMakeLists.txt` so that it exists in one place. The `termesh`
+program is built too and installed as the package's command.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle

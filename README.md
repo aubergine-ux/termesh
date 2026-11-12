@@ -55,7 +55,7 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 | 🎬 | **Scenes**: several models with their own transforms, lights and a camera, described in a small [JSON scene file](docs/scenes.md); camera paths for turntables and flythroughs; a scene inspector sidebar. |
 | 📦 | **Formats**: OBJ (+ MTL), glTF 2.0 (`.gltf` / `.glb`), STL and PLY, all read by loaders written here; point clouds drawn as splats; FBX, COLLADA and dozens more through an optional Assimp backend. |
 | 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
-| 🧩 | **Fits in**: a `--preview` mode for [yazi, lf and ranger](docs/previews.md), and the whole renderer as a library, [libtermesh](docs/library.md), with a stable C API. |
+| 🧩 | **Fits in**: a `--preview` mode for [yazi, lf and ranger](docs/previews.md), and the whole renderer as a library with a stable [C API](docs/library.md) and [Python bindings](docs/python.md). |
 | 🪶 | **Small and portable**: Linux, macOS and Windows Terminal. Three vendored single-header dependencies, one static binary. |
 | 📖 | **Meant to be read**: a few thousand lines of commented C++, with a guided tour in [ARCHITECTURE.md](ARCHITECTURE.md). |
 

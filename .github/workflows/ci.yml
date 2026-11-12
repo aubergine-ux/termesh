@@ -119,6 +119,26 @@ jobs:
           cc examples/c/render.c $(pkg-config --cflags --libs --static termesh) -o render-static
           ./render-static > /dev/null
 
+  # The Python package, built and installed the way pip does it.
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install . pytest
+      - name: Test
+        run: python -m pytest python/tests
+      - name: The command comes along
+        run: termesh --version
+
   # The optional backend: FBX, COLLADA and the rest through Assimp.
   assimp:
     name: Linux (Assimp backend)

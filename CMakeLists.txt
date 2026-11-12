@@ -10,6 +10,7 @@ option(TERMESH_NATIVE "Optimise for the build machine's CPU (-march=native)" OFF
 option(TERMESH_STATIC "Link the C/C++ runtime statically (for release binaries)" OFF)
 option(TERMESH_BUILD_LIBRARY "Build libtermesh, the renderer as a library with a C API" ON)
 option(TERMESH_LIBRARY_STATIC "Build libtermesh as a static library rather than a shared one" OFF)
+option(TERMESH_PYTHON "Build the Python module (needs pybind11)" OFF)
 option(TERMESH_ASSIMP "Read more formats (FBX, COLLADA, 3DS, ...) through the Assimp library" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -128,7 +129,12 @@ if(TERMESH_STATIC AND NOT MSVC AND NOT APPLE)
 endif()
 
 include(GNUInstallDirs)
-install(TARGETS termesh RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(SKBUILD)
+    # Building a Python wheel: the program goes where pip puts commands.
+    install(TARGETS termesh RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+else()
+    install(TARGETS termesh RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 # ---------------------------------------------------------------- library ---
 # libtermesh: the renderer for other programs to use, through the C API in
@@ -216,6 +222,43 @@ if(TERMESH_BUILD_LIBRARY)
     string(REGEX REPLACE "/$" "" TERMESH_PC_PREFIX "${TERMESH_PC_PREFIX}")
     configure_file(cmake/termesh.pc.in ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc @ONLY)
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()
+
+# ----------------------------------------------------------------- python ---
+# The Python package: the C API again, wrapped by python/bindings.cpp, with
+# the engine linked in so the module is one self-contained file. Normally
+# built by pip (see pyproject.toml); a plain CMake build puts an importable
+# package in <build>/python for the tests.
+if(TERMESH_PYTHON)
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(pybind11 CONFIG REQUIRED)
+    pybind11_add_module(_termesh
+        python/bindings.cpp
+        src/capi/capi.cpp
+        $<TARGET_OBJECTS:termesh_core>
+        $<TARGET_OBJECTS:termesh_third_party>)
+    target_include_directories(_termesh PRIVATE include src)
+    target_include_directories(_termesh SYSTEM PRIVATE third_party)
+    target_compile_definitions(_termesh PRIVATE $<TARGET_PROPERTY:termesh_core,INTERFACE_COMPILE_DEFINITIONS>)
+    target_link_libraries(_termesh PRIVATE Threads::Threads)
+    if(TERMESH_ASSIMP)
+        target_link_libraries(_termesh PRIVATE assimp::assimp)
+    endif()
+    if(SKBUILD)
+        install(TARGETS _termesh DESTINATION termesh)
+    else()
+        set(TERMESH_PYTHON_DIR ${CMAKE_CURRENT_BINARY_DIR}/python/termesh)
+        set_target_properties(_termesh PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${TERMESH_PYTHON_DIR})
+        foreach(config ${CMAKE_CONFIGURATION_TYPES})
+            string(TOUPPER ${config} config_upper)
+            set_target_properties(_termesh PROPERTIES
+                LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${TERMESH_PYTHON_DIR}
+                RUNTIME_OUTPUT_DIRECTORY_${config_upper} ${TERMESH_PYTHON_DIR})
+        endforeach()
+        add_custom_command(TARGET _termesh POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/python/termesh/__init__.py ${TERMESH_PYTHON_DIR}/__init__.py)
+    endif()
 endif()
 
 # ------------------------------------------------------------------ tests ---
