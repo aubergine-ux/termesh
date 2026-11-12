@@ -10,6 +10,7 @@ option(TERMESH_NATIVE "Optimise for the build machine's CPU (-march=native)" OFF
 option(TERMESH_STATIC "Link the C/C++ runtime statically (for release binaries)" OFF)
 option(TERMESH_BUILD_LIBRARY "Build libtermesh, the renderer as a library with a C API" ON)
 option(TERMESH_LIBRARY_STATIC "Build libtermesh as a static library rather than a shared one" OFF)
+option(TERMESH_BUILD_PLUGINS "Build the example plugins" ON)
 option(TERMESH_PYTHON "Build the Python module (needs pybind11)" OFF)
 option(TERMESH_ASSIMP "Read more formats (FBX, COLLADA, 3DS, ...) through the Assimp library" OFF)
 
@@ -105,6 +106,7 @@ add_library(termesh_core OBJECT
     src/physics/demo.cpp
     src/physics/world.cpp
     src/pipeline/clip.cpp
+    src/plugin/plugin.cpp
     src/pipeline/renderer.cpp
     src/pipeline/resolve.cpp
     src/post/post.cpp
@@ -120,10 +122,16 @@ add_library(termesh_core OBJECT
     src/stage/scene.cpp
     src/stage/scene_file.cpp
 )
-target_include_directories(termesh_core PUBLIC src)
+target_include_directories(termesh_core PUBLIC src include)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)
 target_link_libraries(termesh_core PUBLIC Threads::Threads PRIVATE termesh_warnings)
 target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSION}")
+# Plugins are shared libraries loaded while the program runs, which a fully
+# static program cannot do.
+target_link_libraries(termesh_core PUBLIC ${CMAKE_DL_LIBS})
+if(TERMESH_STATIC AND NOT MSVC AND NOT APPLE)
+    target_compile_definitions(termesh_core PUBLIC TERMESH_NO_PLUGINS)
+endif()
 
 # The optional Assimp backend. Everything termesh needs is in the tree; this
 # trades that for several dozen more file formats.
@@ -197,7 +205,7 @@ if(TERMESH_BUILD_LIBRARY)
     target_include_directories(termesh_lib SYSTEM PRIVATE third_party)
     target_compile_definitions(termesh_lib PRIVATE
         TERMESH_BUILDING $<TARGET_PROPERTY:termesh_core,INTERFACE_COMPILE_DEFINITIONS>)
-    target_link_libraries(termesh_lib PRIVATE Threads::Threads $<BUILD_INTERFACE:termesh_warnings>)
+    target_link_libraries(termesh_lib PRIVATE Threads::Threads ${CMAKE_DL_LIBS} $<BUILD_INTERFACE:termesh_warnings>)
     if(TERMESH_ASSIMP)
         target_link_libraries(termesh_lib PRIVATE assimp::assimp)
     endif()
@@ -247,21 +255,54 @@ if(TERMESH_BUILD_LIBRARY)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/termesh)
     if(TERMESH_LIBRARY_STATIC)
         set(TERMESH_PC_CFLAGS "")
+        if(CMAKE_DL_LIBS)
+            set(TERMESH_PC_DL "-l${CMAKE_DL_LIBS}")
+        endif()
         # What a C program has to add when linking the static library: the
         # C++ runtime it was written against.
         if(APPLE)
-            set(TERMESH_PC_LIBS_PRIVATE "-lc++ ${CMAKE_THREAD_LIBS_INIT}")
+            set(TERMESH_PC_LIBS_PRIVATE "-lc++ ${CMAKE_THREAD_LIBS_INIT} ${TERMESH_PC_DL}")
         else()
-            set(TERMESH_PC_LIBS_PRIVATE "-lstdc++ -lm ${CMAKE_THREAD_LIBS_INIT}")
+            set(TERMESH_PC_LIBS_PRIVATE "-lstdc++ -lm ${CMAKE_THREAD_LIBS_INIT} ${TERMESH_PC_DL}")
         endif()
     else()
         set(TERMESH_PC_CFLAGS "-DTERMESH_SHARED")
         set(TERMESH_PC_LIBS_PRIVATE "")
     endif()
-    file(RELATIVE_PATH TERMESH_PC_PREFIX "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
+    # The way from the .pc file's directory back up to the prefix ("../..").
+    file(RELATIVE_PATH TERMESH_PC_PREFIX
+        "${CMAKE_CURRENT_BINARY_DIR}/prefix/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "${CMAKE_CURRENT_BINARY_DIR}/prefix")
     string(REGEX REPLACE "/$" "" TERMESH_PC_PREFIX "${TERMESH_PC_PREFIX}")
     configure_file(cmake/termesh.pc.in ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc @ONLY)
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()
+
+# ---------------------------------------------------------------- plugins ---
+# The example plugins: each is one C file that includes termesh_plugin.h and
+# links against nothing. They are built so that they can be tried
+# (termesh --plugin build/plugins/xyz.so cloud.xyz) and so that the tests
+# have real plugins to load.
+if(TERMESH_BUILD_PLUGINS AND NOT EMSCRIPTEN)
+    foreach(plugin xyz quadrant)
+        add_library(termesh_plugin_${plugin} MODULE examples/plugins/${plugin}.c)
+        target_include_directories(termesh_plugin_${plugin} PRIVATE include)
+        set_target_properties(termesh_plugin_${plugin} PROPERTIES
+            PREFIX "" OUTPUT_NAME ${plugin}
+            C_STANDARD 99 C_STANDARD_REQUIRED ON C_VISIBILITY_PRESET hidden
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/plugins)
+        foreach(config ${CMAKE_CONFIGURATION_TYPES})
+            string(TOUPPER ${config} config_upper)
+            set_target_properties(termesh_plugin_${plugin} PROPERTIES
+                LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_CURRENT_BINARY_DIR}/plugins)
+        endforeach()
+        if(NOT MSVC)
+            target_compile_options(termesh_plugin_${plugin} PRIVATE -Wall -Wextra -Wpedantic)
+            target_link_libraries(termesh_plugin_${plugin} PRIVATE m)
+        endif()
+    endforeach()
+endif()
+if(NOT SKBUILD AND NOT EMSCRIPTEN)
+    install(FILES include/termesh_plugin.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 # ----------------------------------------------------------------- python ---
@@ -280,7 +321,7 @@ if(TERMESH_PYTHON)
     target_include_directories(_termesh PRIVATE include src)
     target_include_directories(_termesh SYSTEM PRIVATE third_party)
     target_compile_definitions(_termesh PRIVATE $<TARGET_PROPERTY:termesh_core,INTERFACE_COMPILE_DEFINITIONS>)
-    target_link_libraries(_termesh PRIVATE Threads::Threads)
+    target_link_libraries(_termesh PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
     if(TERMESH_ASSIMP)
         target_link_libraries(_termesh PRIVATE assimp::assimp)
     endif()
@@ -317,6 +358,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_math.cpp
         tests/test_output.cpp
         tests/test_physics.cpp
+        tests/test_plugin.cpp
         tests/test_post.cpp
         tests/test_raster.cpp
         tests/test_record.cpp
@@ -334,6 +376,14 @@ if(TERMESH_BUILD_TESTS)
     endif()
     if(EMSCRIPTEN)
         target_link_options(termesh_tests PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1)
+    endif()
+    if(TARGET termesh_plugin_xyz)
+        # The tests load the example plugins: tell them where those are, and
+        # make sure they are built first.
+        target_compile_definitions(termesh_tests PRIVATE
+            TERMESH_TEST_PLUGIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/plugins"
+            TERMESH_TEST_PLUGIN_SUFFIX="${CMAKE_SHARED_MODULE_SUFFIX}")
+        add_dependencies(termesh_tests termesh_plugin_xyz termesh_plugin_quadrant)
     endif()
     add_test(NAME termesh_tests COMMAND termesh_tests)
 

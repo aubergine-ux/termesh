@@ -23,6 +23,9 @@ struct Options {
 
     // Output selection (unset = detect).
     std::optional<BackendKind> backend;
+    // Which one BackendKind::Custom means: a backend from a plugin. Whether
+    // there is such a backend is only known once the plugins are loaded.
+    std::string customBackend;
     std::optional<ColorDepth> color;
     DitherMode dither = DitherMode::Auto;
 
@@ -105,6 +108,11 @@ struct Options {
     bool benchmarkList = false;     // print the scene names and exit
     std::string benchmarkScene;     // run only this scene
     std::string benchmarkJsonPath;  // also write the results here as JSON
+
+    // Plugins (plugin/plugin.hpp).
+    std::vector<std::string> plugins;  // files to load, from --plugin
+    bool autoPlugins = true;           // also load the ones in the plugin directories
+    bool listPlugins = false;          // say what was loaded and exit
 
     bool showHelp = false, showVersion = false;
 };

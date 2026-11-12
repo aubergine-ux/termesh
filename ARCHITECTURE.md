@@ -1363,6 +1363,201 @@ runs this project's CMake with `TERMESH_PYTHON=ON`; the version number is
 read out of `CMakeLists.txt` so that it exists in one place. The `termesh`
 program is built too and installed as the package's command.
 
+## 29. WebAssembly and the browser playground
+
+`src/input/terminal_wasm.cpp` · `src/web/web_main.cpp` · `web/` · `.github/workflows/pages.yml`
+
+The whole program compiles to WebAssembly with Emscripten and runs in a web
+page, drawing into [xterm.js](https://xtermjs.org), a terminal emulator
+written in JavaScript. Nothing about rendering changed to make that work -
+the rasterizer's SSE2 code compiles to WebAssembly's 128-bit SIMD as it
+stands. What changed is who is in charge.
+
+**A page cannot block.** A terminal program owns its main loop: it sleeps
+until a key arrives or a frame is due. In a browser the loop belongs to the
+browser, and a script that waits freezes the page. So the viewer's loop was
+cut into the three pieces it always had - `begin()`, `step()`, `end()` - and
+`Viewer::run()` became the few lines that call them in a loop. The page
+calls `step()` itself, once per animation frame. `step()` never waits: it
+handles whatever input has arrived, draws a frame if one is due, and
+returns.
+
+**The terminal is an object in JavaScript.** `terminal_wasm.cpp` implements
+the same `Terminal` interface as the POSIX and Windows versions, on top of a
+small object the page supplies: `write(bytes)` goes to xterm.js, `input` is
+a queue the page fills from xterm.js's key and mouse events, and the size
+comes from the widget. `read()` empties the queue and returns at once. The
+capability probe (which works by waiting for replies) is skipped; the page
+knows what its terminal can do.
+
+**Files come from the page.** Emscripten gives the program an in-memory
+file system. A model dropped on the page is written into it by the page's
+script - with whatever came with it, so a `.gltf` finds its `.bin` and
+textures - and then opened by path like any other file. Nothing leaves the
+browser.
+
+**One thread.** Browsers only allow WebAssembly threads on pages served
+with particular headers, which a static host like GitHub Pages does not
+send. The thread pool is built with a single thread there (every
+`parallelFor` runs inline), and levels of detail are built up front instead
+of on a background thread.
+
+The same build also produces the ordinary command-line program as a
+`.js` + `.wasm` pair that Node can run with the real file system. That is
+how CI tests WebAssembly: the unit tests, the command line, and
+`web/test/smoke.cjs`, which drives the browser build through a fake terminal
+- typing keys, dragging the mouse, resizing, "dropping" files - without a
+browser.
+
+## 30. Recording a session
+
+`src/export/recorder.{hpp,cpp}` · `--record`, `R` in the viewer · [docs/recording.md](docs/recording.md)
+
+Two different things can be recorded, and the file's extension picks which.
+
+**What was sent to the terminal** (`.cast`). An
+[asciinema](https://asciinema.org) recording is a text file: a JSON header,
+then one line per write - `[seconds, "o", "the bytes"]`. Every byte the
+viewer sends goes through one function, `Viewer::emit`, which hands a copy
+to the recorder with a timestamp. Since the viewer only ever sends the cells
+that changed, the recording is small, and it replays exactly: same colours,
+same characters, in a terminal or on a web page. The one subtlety is that a
+recording started in mid-session must begin with a whole screen rather than
+changes to a screen the player never saw, so starting one invalidates the
+backend's memory of what is displayed. Bytes are written as JSON strings
+with invalid UTF-8 replaced, so the file is always valid.
+
+**What the renderer drew** (`.gif`, `.mp4`). Frames arrive whenever the
+viewer happens to draw one - sixty a second while something spins, none
+while nothing moves - but a video has a fixed frame rate. `FramePacer`
+holds the latest picture and, each time a new one arrives, first writes the
+old one as many times as it was on show for. Pictures are scaled up by whole
+numbers to the shape they have on screen (an ASCII "pixel" is twice as tall
+as wide) so a recording looks like the terminal did.
+
+- **GIF** reuses the encoder from the turntable export. Its palette has to
+  be chosen before the first frame is written, but a session's frames are
+  not known in advance; so the first second is held back and the palette
+  chosen from it, together with a small synthetic image containing an even
+  spread of every colour - which guarantees that whatever the session shows
+  later has *some* reasonable entry to map to.
+- **MP4** is the one thing termesh does not do itself: H.264 is far outside
+  what belongs in a small renderer. Raw frames are piped to `ffmpeg` if it
+  is installed, and the option explains itself if it is not.
+
+## 31. Rigid-body physics
+
+`src/physics/world.{hpp,cpp}` · `demo.{hpp,cpp}` · `termesh --demo physics`
+
+A small rigid-body engine: spheres and boxes that fall, collide, stack and
+come to rest. It is separate from rendering - `PhysicsWorld` knows nothing
+about pictures - and joins a scene through one interface, `SceneDriver`,
+which the scene calls each frame to let something move its objects.
+
+Time advances in fixed steps of 1/120 s whatever the frame rate (an
+accumulator carries the remainder), because a simulation stepped by
+variable amounts behaves differently on a fast machine and a slow one. Each
+step:
+
+**1. Integrate forces.** Gravity is added to each velocity.
+
+**2. Find contacts.** Each pair of bodies close enough to touch is tested by
+a function for its pair of shapes, producing *contacts*: a point, a normal
+and a depth of overlap.
+
+- *Sphere-sphere* and *sphere-ground* are one comparison each.
+- *Sphere-box* clamps the sphere's centre to the box (in the box's own
+  frame, where it is axis-aligned) to find the box's closest point.
+- *Box-box* uses the separating axis theorem: two convex shapes are apart
+  exactly when their shadows on some axis do not overlap, and for boxes
+  fifteen axes suffice (three face normals each, nine edge-edge cross
+  products). The axis of least overlap gives the normal and the kind of
+  contact. For a face contact, the opposing face of the other box is clipped
+  against the sides of the reference face (Sutherland-Hodgman, as in the
+  [clipper](#3-clipping)), which yields up to eight contact points - what
+  lets a box rest flat instead of balancing on a point. For an edge contact
+  it is the closest points of the two edges.
+
+**3. Solve.** Each contact wants one thing: the two bodies must not be
+approaching along its normal. The impulse that achieves that for one contact
+follows from the bodies' masses and inertia; but applying it disturbs the
+other contacts. *Sequential impulses* simply goes round all the contacts a
+dozen times, applying each one's correction in turn, and the errors shrink
+towards a solution for the whole pile. Three refinements make it behave:
+
+- the *accumulated* impulse of a contact is clamped to be non-negative
+  (contacts push, never pull), rather than each correction - so a later pass
+  can take back some of what an earlier one gave;
+- friction is solved the same way along two tangent directions, clamped to
+  the friction coefficient times the normal impulse (Coulomb's law);
+- remaining overlap is removed gently, by asking for a small separating
+  velocity proportional to the depth, rather than by moving bodies apart.
+
+**4. Integrate velocities**, turning each orientation quaternion by the
+angular velocity.
+
+**5. Sleep.** A body that has barely moved for a while stops being simulated
+until something moving touches it. This is what lets a pile become
+completely still (and the viewer stop redrawing), where the solver alone
+would leave it trembling. Balls also lose a little spin while they touch
+something - rolling resistance - since friction alone never stops a ball
+that is rolling without slipping.
+
+The demo builds a wall of crates and drops more crates and balls on it;
+Enter throws a ball from the camera, Backspace starts again. Its floor has
+edges, and things can fall off them.
+
+## 32. Plugins
+
+`include/termesh_plugin.h` · `src/plugin/plugin.{hpp,cpp}` · `examples/plugins/` · [docs/plugins.md](docs/plugins.md)
+
+A plugin is a shared library that adds a file loader or an output backend
+while the program is running. The two things plugins can add are the two
+places where termesh already looked things up in a table rather than a
+`switch`: the [loader table](#25-more-formats-stl-ply-point-clouds) and a
+table of backends by name. Loading a plugin only adds rows to those tables.
+
+The interface between program and plugin is C, for the same reasons as the
+[library's](#27-libtermesh-the-c-api), and it is deliberately one-way: **a
+plugin links against nothing**. The program is an executable, which exports
+no symbols for a library to call. Instead, the program passes the plugin's
+one entry point a table of function pointers - the *host*:
+
+```
+termesh                                       plugin.so
+-------                                       ---------
+dlopen("plugin.so")
+dlsym("termesh_plugin_init")
+termesh_plugin_init(&host)        ------->    host->register_loader(host, "xyz", load, 0)
+   registerModelLoader({"xyz"}, ...)  <----
+...
+loadModel("scan.xyz")
+   load(user, path, model, &host) ------->    host->add_mesh(model, &mesh)
+   Model                              <----
+```
+
+So the plugin needs only the header to compile, and the same binary plugin
+works with any build of the program that speaks its API version.
+
+**Loaders** receive a path and an opaque model, and describe each mesh to
+`host->add_mesh` as plain arrays, which are validated and copied - a plugin
+never sees or touches the program's own data structures.
+
+**Backends** are described rather than implemented in full: a plugin says
+how many picture pixels one character cell holds, and supplies a function
+that turns a frame of pixels into rows of text. The program's adapter
+(`PluginBackend`) does the rest of what a backend must - sizes the picture,
+works out the pixel aspect ratio, positions the rows, and remembers what is
+on screen so that unchanged rows are not sent again.
+
+The two examples are each a single C file: `xyz.c` reads `.xyz` point
+clouds, and `quadrant.c` draws with Unicode quadrant blocks, 2 x 2 pixels
+per cell.
+
+A fully static executable cannot load shared libraries, so the static
+Linux release binary reports that it has no plugin support; the builds for
+macOS and Windows, and any build from source, have it.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle

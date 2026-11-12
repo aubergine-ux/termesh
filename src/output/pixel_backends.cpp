@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "output/backends.hpp"
@@ -352,6 +353,7 @@ const char* backendName(BackendKind kind) {
         case BackendKind::Sixel: return "sixel";
         case BackendKind::HalfBlock: return "halfblock";
         case BackendKind::Braille: return "braille";
+        case BackendKind::Custom: return "custom";
         default: return "ascii";
     }
 }
@@ -364,12 +366,47 @@ std::optional<BackendKind> backendFromName(std::string_view name) {
     return std::nullopt;
 }
 
-std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color) {
+namespace {
+
+// Backends registered at run time, in the order they arrived.
+std::vector<std::pair<std::string, BackendFactory>>& registry() {
+    static std::vector<std::pair<std::string, BackendFactory>> table;
+    return table;
+}
+
+}  // namespace
+
+void registerBackend(const std::string& name, BackendFactory factory) {
+    for (auto& entry : registry()) {
+        if (entry.first == name) {
+            entry.second = std::move(factory);
+            return;
+        }
+    }
+    registry().emplace_back(name, std::move(factory));
+}
+
+bool isRegisteredBackend(std::string_view name) {
+    return std::any_of(registry().begin(), registry().end(), [&](const auto& entry) { return entry.first == name; });
+}
+
+std::vector<std::string> registeredBackendNames() {
+    std::vector<std::string> names;
+    for (const auto& entry : registry()) names.push_back(entry.first);
+    return names;
+}
+
+std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color, const std::string& customName) {
     switch (kind) {
         case BackendKind::Kitty: return makeKittyBackend();
         case BackendKind::Sixel: return makeSixelBackend();
         case BackendKind::HalfBlock: return makeHalfBlockBackend(color);
         case BackendKind::Braille: return makeBrailleBackend(color);
+        case BackendKind::Custom:
+            for (const auto& entry : registry())
+                if (entry.first == customName) return entry.second(color);
+            // Not there (any more): fall back to what always works.
+            return makeAsciiBackend(color);
         default: return makeAsciiBackend(color);
     }
 }

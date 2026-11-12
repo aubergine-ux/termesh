@@ -52,6 +52,42 @@ TEST_CASE("options: both value syntaxes") {
     CHECK(b.options.color == ColorDepth::Indexed256);
 }
 
+TEST_CASE("options: plugins, recording and the physics demo") {
+    const ParseResult a =
+        parse({"--plugin", "a.so", "--plugin=b.so", "--no-plugins", "--backend", "quadrant", "m.obj"});
+    REQUIRE(a.ok);
+    CHECK(a.options.plugins == std::vector<std::string>{"a.so", "b.so"});
+    CHECK_FALSE(a.options.autoPlugins);
+    // A name that is not built in is taken on trust until the plugins are loaded.
+    CHECK(a.options.backend == BackendKind::Custom);
+    CHECK(a.options.customBackend == "quadrant");
+    // A later built-in choice, or "auto", replaces it.
+    CHECK(parse({"--backend", "quadrant", "--backend", "ascii", "m.obj"}).options.customBackend.empty());
+    const ParseResult automatic = parse({"--backend", "quadrant", "--backend", "auto", "m.obj"});
+    CHECK_FALSE(automatic.options.backend.has_value());
+    CHECK(automatic.options.customBackend.empty());
+
+    // --list-plugins needs no model.
+    const ParseResult list = parse({"--list-plugins"});
+    REQUIRE(list.ok);
+    CHECK(list.options.listPlugins);
+    CHECK(parse({"m.obj"}).options.autoPlugins);
+
+    const ParseResult record = parse({"m.obj", "--record", "session.cast", "--mp4", "turn.mp4"});
+    REQUIRE(record.ok);
+    CHECK(record.options.recordPath == "session.cast");
+    CHECK(record.options.mp4Path == "turn.mp4");
+    CHECK_FALSE(parse({"m.obj", "--record", "session.txt"}).ok);
+    CHECK_FALSE(parse({"m.obj", "--record"}).ok);
+
+    const ParseResult physics = parse({"--demo", "physics", "--bodies", "40", "--no-shadows"});
+    REQUIRE(physics.ok);
+    CHECK(physics.options.demo == "physics");
+    CHECK(physics.options.bodies == 40);
+    CHECK_FALSE(parse({"--demo", "physics", "--bodies", "0"}).ok);
+    CHECK_FALSE(parse({"--demo", "physics", "--bodies", "9999"}).ok);
+}
+
 TEST_CASE("options: turntable recording") {
     const ParseResult r = parse({"--spin", "--gif", "out.gif", "--frames", "36", "--demo", "knot"});
     REQUIRE(r.ok);
@@ -377,7 +413,8 @@ TEST_CASE("preview cache: storing, fetching and pruning") {
     std::string out;
     CHECK_FALSE(readPreviewCache(cache, "0123456789abcdef", out));
 
-    const std::string picture = std::string("\x1b[38;2;1;2;3m") + "\xe2\x96\x80" + std::string(1, '\0') + "\n";  // arbitrary bytes
+    const std::string picture =
+        std::string("\x1b[38;2;1;2;3m") + "\xe2\x96\x80" + std::string(1, '\0') + "\n";  // arbitrary bytes
     writePreviewCache(cache, "0123456789abcdef", picture);
     REQUIRE(readPreviewCache(cache, "0123456789abcdef", out));
     CHECK(out == picture);
@@ -402,7 +439,8 @@ TEST_CASE("preview cache: storing, fetching and pruning") {
 }
 
 TEST_CASE("options: preview mode") {
-    const ParseResult r = parse({"model.glb", "--preview", "--cols", "40", "--rows", "12", "--no-cache", "--preview-max-mb", "64"});
+    const ParseResult r =
+        parse({"model.glb", "--preview", "--cols", "40", "--rows", "12", "--no-cache", "--preview-max-mb", "64"});
     REQUIRE(r.ok);
     CHECK(r.options.preview);
     CHECK_FALSE(r.options.previewCache);

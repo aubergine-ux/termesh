@@ -7,17 +7,26 @@
 //   ascii      one shaded character per cell; works anywhere
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/image.hpp"
 #include "output/dither.hpp"
 
 namespace termesh {
 
-enum class BackendKind { Kitty, Sixel, HalfBlock, Braille, Ascii };
+enum class BackendKind {
+    Kitty,
+    Sixel,
+    HalfBlock,
+    Braille,
+    Ascii,
+    Custom,  // one that was registered at run time (by a plugin): see registerBackend
+};
 
 const char* backendName(BackendKind kind);
 std::optional<BackendKind> backendFromName(std::string_view name);
@@ -42,6 +51,8 @@ public:
     virtual ~Backend() = default;
 
     virtual BackendKind kind() const = 0;
+    // What it is called: on the command line and in the status bar.
+    virtual const char* name() const { return backendName(kind()); }
 
     // Tell the backend where it is drawing; returns the size of the image it
     // wants to be given, in pixels. Forgets anything it knew about the
@@ -98,6 +109,14 @@ protected:
     DitherMode dither_ = DitherMode::Auto;
 };
 
-std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color);
+// `customName` says which registered backend BackendKind::Custom means.
+std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color, const std::string& customName = {});
+
+// More backends can be added at run time, by name. The five built-in ones
+// are not in this table and cannot be replaced.
+using BackendFactory = std::function<std::unique_ptr<Backend>(ColorDepth)>;
+void registerBackend(const std::string& name, BackendFactory factory);
+bool isRegisteredBackend(std::string_view name);
+std::vector<std::string> registeredBackendNames();
 
 }  // namespace termesh

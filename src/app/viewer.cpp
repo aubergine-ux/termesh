@@ -257,7 +257,7 @@ void Viewer::rebuildBackend() {
         backend_->cleanup(out);
         emit(out);
     }
-    backend_ = makeBackend(effectiveBackend(), caps_.color);
+    backend_ = makeBackend(effectiveBackend(), caps_.color, options_.customBackend);
     backend_->setDither(dither_);
     layout();
 }
@@ -388,8 +388,8 @@ void Viewer::drawStatusBar(std::string& out) {
                                     (settings_.textures ? "" : " notex") +
                                     // For an animated model "paused" belongs to the timeline below.
                                     (autoRotate_ || followPath_ || player ? "" : " paused");
-        const std::string target = std::string(backendName(backend_->kind())) + " " + std::to_string(imageWidth_) +
-                                   "x" + std::to_string(imageHeight_);
+        const std::string target =
+            std::string(backend_->name()) + " " + std::to_string(imageWidth_) + "x" + std::to_string(imageHeight_);
         char fps[32], timing[96];
         // Nothing is drawn while nothing moves, so a rate would be meaningless.
         if (autoRotate_ || dragging_ || followPath_ || scene_.playing())
@@ -680,7 +680,7 @@ void Viewer::handleKey(const KeyEvent& key) {
                         it == available_.end() ? 0 : static_cast<std::size_t>(it - available_.begin());
                     baseBackend_ = available_[(index + 1) % available_.size()];
                     rebuildBackend();
-                    notify(std::string("backend: ") + backendName(backend_->kind()));
+                    notify(std::string("backend: ") + backend_->name());
                     return;
                 }
                 case U'o':

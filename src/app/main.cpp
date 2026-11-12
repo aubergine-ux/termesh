@@ -18,6 +18,7 @@
 #include "export/offscreen.hpp"
 #include "export/recorder.hpp"
 #include "pipeline/resolve.hpp"
+#include "plugin/plugin.hpp"
 #include "raster/simd.hpp"
 #include "scene/loader.hpp"
 #include "scene/primitives.hpp"
@@ -233,7 +234,7 @@ int runPrint(const Options& options, Scene& scene, ThreadPool& pool) {
     area.cellHeight = caps.cellHeight;
 
     const BackendKind kind = options.backend.value_or(chooseBackend(caps));
-    const auto backend = makeBackend(kind, caps.color);
+    const auto backend = makeBackend(kind, caps.color, options.customBackend);
     backend->setDither(options.dither);
     int width = 0, height = 0;
     backend->configure(area, width, height);
@@ -300,7 +301,7 @@ PreviewTarget previewTarget(const Options& options) {
             options.shadows, static_cast<double>(options.exposure), static_cast<int>(options.toneMapper),
             static_cast<int>(options.dither),
             options.background.r << 16 | options.background.g << 8 | options.background.b);
-        target.cacheKey = previewCacheKey(options.inputs.front(), parameters);
+        target.cacheKey = previewCacheKey(options.inputs.front(), parameters + options.customBackend);
     }
     return target;
 }
@@ -312,7 +313,7 @@ std::string renderPreview(const Options& options, Scene& scene, const PreviewTar
     area.cols = target.cols;
     area.rows = std::max(target.rows - (caption ? 1 : 0), 1);
 
-    const auto backend = makeBackend(target.backend, target.color);
+    const auto backend = makeBackend(target.backend, target.color, options.customBackend);
     backend->setDither(options.dither);
     int width = 0, height = 0;
     backend->configure(area, width, height);
@@ -457,6 +458,56 @@ int runBenchmark(const Options& options) {
     return 0;
 }
 
+// Load the plugins named on the command line and the ones in the plugin
+// directories. Returns an exit code if the program should stop here (an
+// error, or --list-plugins), and -1 to carry on.
+int loadPlugins(const Options& options) {
+    for (const std::string& path : options.plugins) {
+        if (std::string error; !loadPlugin(path, error)) {
+            std::fprintf(stderr, "termesh: %s\n", error.c_str());
+            return 1;
+        }
+    }
+    // A plugin that was not asked for by name and does not load is worth a
+    // warning, but not worth refusing to run.
+    if (options.autoPlugins && pluginsSupported()) {
+        for (const std::string& directory : pluginDirectories()) {
+            std::vector<std::string> errors;
+            loadPluginDirectory(directory, errors);
+            for (const std::string& error : errors) std::fprintf(stderr, "termesh: warning: %s\n", error.c_str());
+        }
+    }
+
+    if (options.listPlugins) {
+        if (!pluginsSupported()) std::printf("this build of termesh cannot load plugins\n");
+        else if (loadedPlugins().empty()) std::printf("no plugins loaded\n");
+        for (const PluginInfo& plugin : loadedPlugins()) {
+            std::printf("%s  (%s)\n", plugin.name.c_str(), plugin.path.c_str());
+            if (!plugin.extensions.empty()) {
+                std::printf("  loads   ");
+                for (const std::string& extension : plugin.extensions) std::printf(" .%s", extension.c_str());
+                std::printf("\n");
+            }
+            for (std::size_t i = 0; i < plugin.backends.size(); ++i)
+                std::printf("  backend  %s  %s\n", plugin.backends[i].c_str(), plugin.backendDescriptions[i].c_str());
+        }
+        if (!options.plugins.empty() || options.autoPlugins) {
+            std::printf("plugin directories:\n");
+            for (const std::string& directory : pluginDirectories()) std::printf("  %s\n", directory.c_str());
+        }
+        return 0;
+    }
+
+    if (options.backend == BackendKind::Custom && !isRegisteredBackend(options.customBackend)) {
+        std::string known = "kitty, sixel, halfblock, braille, ascii";
+        for (const std::string& name : registeredBackendNames()) known += ", " + name;
+        std::fprintf(stderr, "termesh: unknown backend '%s' (there is: %s)\nTry 'termesh --help'.\n",
+                     options.customBackend.c_str(), known.c_str());
+        return 2;
+    }
+    return -1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -481,6 +532,10 @@ int main(int argc, char** argv) {
         for (const std::string& name : benchmarkSceneNames()) std::printf("%s\n", name.c_str());
         return 0;
     }
+
+    // Plugins come first: they decide which files can be opened and which
+    // backends exist.
+    if (const int status = loadPlugins(options); status >= 0) return status;
     if (options.benchmark) return runBenchmark(options);
 
     // Previews: answer from the cache if possible, before loading anything.

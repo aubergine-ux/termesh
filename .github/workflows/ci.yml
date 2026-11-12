@@ -83,6 +83,15 @@ jobs:
           test -s stl.png && test -s ply.png && test -s points.png
           "$bin" --preview tri.stl --cols 40 --rows 12 --no-cache
           "$bin" --preview examples/showroom.json --cols 40 --rows 12 --no-cache --color 256
+          "$bin" --demo physics --anim-time 2 --png physics.png --size 320x240
+          "$bin" --demo physics --bodies 12 --gif physics.gif --size 160x120 --frames 10
+          plugins=build/plugins; ext=so
+          [ -f build/plugins/xyz.dll ] && ext=dll
+          printf '0 0 0 255 0 0\n1 0 0 0 255 0\n0 1 0 0 0 255\n1 1 1\n' > cloud.xyz
+          "$bin" --no-plugins --plugin $plugins/xyz.$ext --plugin $plugins/quadrant.$ext --list-plugins
+          "$bin" --no-plugins --plugin $plugins/xyz.$ext cloud.xyz --png xyz.png --size 200x150
+          "$bin" --no-plugins --plugin $plugins/quadrant.$ext --backend quadrant --demo knot --print --cols 60 --rows 20
+          test -s physics.png && test -s physics.gif && test -s xyz.png
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
 
   # libtermesh as a client sees it: installed, then found through pkg-config
@@ -245,3 +254,5 @@ jobs:
           build/termesh --benchmark --frames 2 > /dev/null
           build/termesh examples/showroom.json --camera-time 2 --lod 1 --png scene.png --size 240x160
           build/termesh examples/flythrough.json --gif fly.gif --size 120x80 --frames 6
+          build/termesh --demo physics --anim-time 3 --png physics.png --size 200x150
+          build/termesh --no-plugins --plugin build/plugins/quadrant.so --backend quadrant --demo knot --print --cols 40 --rows 12 > /dev/null

@@ -118,6 +118,12 @@ std::string usageText() {
            "                         ...or \"physics\": crates and balls falling, colliding and coming\n"
            "                         to rest (Enter throws a ball, Backspace starts again)\n"
            "      --bodies <n>       how many things the physics demo starts with (default: 28)\n"
+           "\n"
+           "Plugins (see docs/plugins.md):\n"
+           "      --plugin <file>    load a plugin: a shared library adding file formats or backends\n"
+           "      --no-plugins       do not load the plugins in the plugin directory\n"
+           "      --list-plugins     list the plugins loaded and what they provide, and exit\n"
+           "\n"
            "  -h, --help             show this help\n"
            "  -V, --version          show the version\n"
            "\n"
@@ -432,14 +438,31 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         else if (name == "--demo") {
             if (!needValue()) return missing();
             o.demo = std::string(value);
+        } else if (name == "--plugin") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.plugins.emplace_back(value);
+        } else if (name == "--no-plugins") {
+            o.autoPlugins = false;
+        } else if (name == "--list-plugins") {
+            o.listPlugins = true;
         } else if (name == "--bodies") {
             if (!needValue()) return missing();
             if (!intOption(o.bodies, 1, 200)) return invalid();
         } else if (name == "-b" || name == "--backend") {
             if (!needValue()) return missing();
-            if (value != "auto") {
+            o.customBackend.clear();
+            if (value == "auto") {
+                o.backend.reset();
+            } else {
+                if (value.empty()) return invalid();
                 o.backend = backendFromName(value);
-                if (!o.backend) return invalid();
+                // Not one of the built-in ones: it may be a plugin's. That
+                // is checked once the plugins have been loaded.
+                if (!o.backend) {
+                    o.backend = BackendKind::Custom;
+                    o.customBackend = std::string(value);
+                }
             }
         } else if (name == "--color" || name == "--colour") {
             if (!needValue()) return missing();
@@ -612,7 +635,7 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         }
     }
 
-    if (o.showHelp || o.showVersion || o.benchmark || o.benchmarkList) return result;
+    if (o.showHelp || o.showVersion || o.benchmark || o.benchmarkList || o.listPlugins) return result;
     if (o.inputs.empty() && o.demo.empty()) return fail("no model given");
     if (!o.inputs.empty() && !o.demo.empty()) return fail("give either model files or --demo, not both");
     // A scene file is a whole scene; it cannot be combined with more models.
