@@ -39,9 +39,13 @@ jobs:
         with:
           path: site
 
+  # GitHub Pages serves a private repository only on a paid plan, so while
+  # the repository is private the site is built and checked but not published.
+  # Once it is public: Settings > Pages > Source: "GitHub Actions".
   deploy:
     name: Deploy
     needs: build
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
