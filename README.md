@@ -53,7 +53,7 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 | 🦊 | **Animation**: glTF skeletal animation with skinning, morph targets and cross-fades between clips, plus a timeline you can pause, scrub, slow down or run backwards. |
 | 🖱️ | **Interactive**: orbit, pan and zoom with the mouse or keyboard, click a mesh to inspect it, switch shading live, toggle auto-rotate and a stats bar. |
 | 🎬 | **Scenes**: several models with their own transforms, lights and a camera, described in a small [JSON scene file](docs/scenes.md); camera paths for turntables and flythroughs; a scene inspector sidebar. |
-| 📦 | **OBJ and glTF 2.0**: `.obj` + `.mtl`, `.gltf` and `.glb`, with embedded or external textures. |
+| 📦 | **Formats**: OBJ (+ MTL), glTF 2.0 (`.gltf` / `.glb`), STL and PLY, all read by loaders written here; point clouds drawn as splats; FBX, COLLADA and dozens more through an optional Assimp backend. |
 | 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
 | 🪶 | **Small and portable**: Linux, macOS and Windows Terminal. Three vendored single-header dependencies, one static binary. |
 | 📖 | **Meant to be read**: a few thousand lines of commented C++, with a guided tour in [ARCHITECTURE.md](ARCHITECTURE.md). |
@@ -154,6 +154,7 @@ termesh examples/showroom.json          # a scene: models, lights, camera path
 | Ambient occlusion, bloom, outlines, FXAA |         | <kbd>u</kbd> <kbd>g</kbd> <kbd>i</kbd> <kbd>f</kbd> |
 | Tone curve, exposure   |                           | <kbd>z</kbd>, <kbd>{</kbd> <kbd>}</kbd> |
 | Dithering mode         |                           | <kbd>d</kbd>                  |
+| Draw as points; smaller / larger points |          | <kbd>P</kbd>, <kbd>(</kbd> <kbd>)</kbd> |
 | Play / pause animation |                           | <kbd>a</kbd>                  |
 | Step back / forward    |                           | <kbd>,</kbd> <kbd>.</kbd>     |
 | Slower / faster        |                           | <kbd>&lt;</kbd> <kbd>&gt;</kbd> |
@@ -184,6 +185,7 @@ termesh examples/showroom.json          # a scene: models, lights, camera path
 | `--tonemap <curve>`, `--exposure <stops>` | `aces` (default), `reinhard`, `filmic` or `linear` |
 | `-w`, `--wireframe` | start in wireframe mode |
 | `--no-textures`, `--no-normal-maps`, `--no-cull` | switch parts of the renderer off |
+| `--points`, `--point-size <x>` | draw every mesh as points; scale the splats |
 | `--bg <rrggbb>` | background colour |
 | `--ssaa <n>` | supersampling factor, 1-4 |
 | `--threads <n>` | worker threads (default: all cores) |
@@ -345,7 +347,9 @@ AddressSanitizer / UBSan build. Formatting follows the checked-in `.clang-format
 ## 🚧 Limitations
 
 - Skinning uses at most four bones per vertex, and glTF cameras and lights are ignored.
-- Vertex colours and secondary UV sets are ignored.
+- Secondary UV sets are ignored, and a mesh that is normal-mapped does not also show vertex colours.
+- Point clouds without normals are shaded as if every point faced the viewer.
+- The Assimp backend imports geometry and materials, not animation.
 - Draco- and meshopt-compressed geometry and KTX2 / WebP textures are not supported.
 - Translucent surfaces are sorted per triangle, so two that intersect each other can blend in the wrong order.
 - Shadows come from directional and spot lights, not point lights, and only in the per-pixel shading modes.

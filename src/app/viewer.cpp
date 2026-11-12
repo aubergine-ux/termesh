@@ -55,6 +55,7 @@ const char* const kHelpLines[] = {
     "z  {  }                    tone curve, exposure down / up",
     "v                          follow the scene's camera path / take over",
     "d                          next dithering mode",
+    "P  (  )                    draw as points; smaller / larger points",
     "",
     "a                          play / pause the animation",
     ",  .                       step one frame back / forward",
@@ -362,7 +363,9 @@ void Viewer::drawStatusBar(std::string& out) {
         }
 
         const std::string name = " " + scene_.name;
-        const std::string tris = formatCount(scene_.triangleCount()) + " tris";
+        // A scene of point clouds has no triangles to count.
+        const std::string tris = scene_.triangleCount() ? formatCount(scene_.triangleCount()) + " tris"
+                                                        : formatCount(scene_.vertexCount()) + " points";
         const std::string candidates[] = {
             name + " | " + tris + " | " + shading + clip + " | " + target +
                 (supersampling_ > 1 ? " ssaa" + std::to_string(supersampling_) : "") +
@@ -742,6 +745,18 @@ bool Viewer::handleEffectKey(char32_t ch) {
                 notify("following the camera path");
             }
             break;
+        case U'P':
+            settings_.points = !settings_.points;
+            onOff("points", settings_.points);
+            break;
+        case U'(':
+        case U')': {
+            settings_.pointScale = std::clamp(settings_.pointScale * (ch == U')' ? 1.25f : 0.8f), 0.05f, 50.0f);
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "point size x%.2f", settings_.pointScale);
+            notify(buf);
+            break;
+        }
         case U'd':
             dither_ = static_cast<DitherMode>((static_cast<int>(dither_) + 1) % 4);
             backend_->setDither(dither_);

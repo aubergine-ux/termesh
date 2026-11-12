@@ -111,7 +111,8 @@ void Inspector::rebuild(const Scene& scene) {
         const Model& model = object.model;
         const int oi = static_cast<int>(o);
         const std::string base = "o" + std::to_string(o);
-        std::string state = count(model.triangleCount()) + " tris";
+        std::string state =
+            model.triangleCount() ? count(model.triangleCount()) + " tris" : count(model.vertexCount()) + " points";
         if (!object.visible) state = "hidden";
         if (!add(InspectorRow::Kind::Object, 0, object.name.empty() ? "(unnamed)" : object.name, state, base, oi, -1,
                  true))

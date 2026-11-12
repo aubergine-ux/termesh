@@ -32,6 +32,7 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [22. Scenes and scene files](#22-scenes-and-scene-files)
 - [23. Camera paths](#23-camera-paths)
 - [24. The inspector](#24-the-inspector)
+- [25. More formats: STL, PLY, point clouds](#25-more-formats-stl-ply-point-clouds)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -111,6 +112,9 @@ These match OpenGL and glTF, and are stated once in `src/math/mat.hpp`:
 ## 1. Loading
 
 `src/scene/loader.cpp` · `obj_loader.cpp` · `gltf_loader.cpp`
+
+(This section covers OBJ and glTF; STL, PLY, point clouds and the optional
+Assimp backend are in [section 25](#25-more-formats-stl-ply-point-clouds).)
 
 Both loaders produce the same thing: a `Model`, which is a flat list of meshes
 whose vertices are already in **world space**, so the renderer never deals
@@ -1153,6 +1157,98 @@ Selecting a row tells the renderer which mesh (or whole model) to tint, and a
 click in the picture runs the [picking](#18-the-bvh-culling-and-picking) ray
 and opens the outline at whatever it hit.
 
+## 25. More formats: STL, PLY, point clouds
+
+`src/scene/stl_loader.cpp` · `ply_loader.cpp` · `loader.cpp` · `assimp_loader.cpp`
+
+### The loader table
+
+`loadModel` looks the file's extension up in a table of loaders. The built-in
+formats are in it from the start; `registerModelLoader` adds more, and
+`registerFallbackModelLoader` names one to try for anything unclaimed. The
+table is built on first use rather than at program start, so code that
+registers a loader from a static initialiser finds it ready.
+
+### STL
+
+The format of 3D printing: nothing but triangles. It has two encodings and no
+reliable way to tell them apart by looking at the start, because a binary
+file's 80-byte header is free text and often begins with `solid` - which is
+how every ASCII file begins. The test that works is arithmetic: a binary file
+is exactly `84 + 50 × count` bytes long.
+
+STL has no shared vertices, so each triangle becomes three vertices carrying
+the triangle's own normal - recomputed from its corners, since the normal
+stored in the file is redundant and frequently wrong or zero.
+
+### PLY
+
+The format of 3D scanners. A PLY file describes itself: its header lists
+*elements* (vertex, face, ...) with a count and typed *properties* each, and
+the data follows in that order as text or as binary of either byte order. So
+the reader has no layout to assume. It builds a table from the header and
+walks the data with it, collecting the properties it knows by name (`x y z`,
+`nx ny nz`, `red green blue`, texture coordinates, `vertex_indices`) and
+stepping over the rest - including whole elements it has no use for, and the
+dozens of extra per-point properties a Gaussian-splatting file carries (from
+which it takes just the colour).
+
+Counts in the header are checked against the size of the file before
+anything is allocated, so a damaged or hostile header cannot ask for
+gigabytes.
+
+### Vertex colours
+
+Scans carry their colour per vertex, not in a texture. `Mesh::colors` holds
+one linear RGB colour per vertex, which multiplies the material's base colour.
+Getting it to the fragment shader costs nothing for models that have none:
+per pixel it rides in the varyings the tangent would otherwise use (a mesh
+needs its tangent only for normal mapping, and where both are wanted the
+normal map wins), and vertex-lit frames grow three varyings wider only when
+something in them is coloured.
+
+### Point clouds and splats
+
+A mesh with vertices but no triangles is a point cloud, and `--points` draws
+any mesh as one. Each point becomes a **splat**: a small square facing the
+camera, built directly in clip space,
+
+```
+corner = centre + (±radius · Px, ±radius · Py, 0, 0)        Px, Py: the projection's x and y scale
+```
+
+Adding the same clip-space offset before the perspective divide makes nearer
+points come out larger, as they should. The corners carry (−1, −1) … (1, 1)
+where texture coordinates would be and the fragment shader keeps only the
+disc inside the unit circle. From there a splat is two ordinary triangles:
+clipped, binned, depth-tested and shaded like any others, casting and
+receiving shadows.
+
+- **Size.** The radius is the cloud's typical point spacing, estimated when
+  it is loaded by timing a few hundred points against a sample of the rest
+  (and scaling for the sample being sparser than the whole). A splat is
+  never less than three quarters of a pixel in radius - a disc that size
+  always contains a pixel centre - so distant points do not flicker.
+- **Shading.** With a normal, a point is lit like a surface. Without one it
+  is treated as facing the viewer; ambient occlusion (`--ssao`) then does
+  most of the work of showing the shape.
+- **Thinning.** A cloud so far away that its splats are sub-pixel is drawn
+  with every k-th point at k times the area. Clouds are shuffled when loaded
+  so that any such subset is an even sample.
+- **Textured meshes as points** take each point's colour from the texture at
+  its own coordinates.
+
+### The Assimp backend
+
+termesh's own loaders are written out in full because reading a format is
+part of what the project is for. `-DTERMESH_ASSIMP=ON` makes the opposite
+bargain: one dependency, the Open Asset Import Library, in exchange for FBX,
+COLLADA, 3DS, Blender and several dozen more. It registers as the fallback
+loader, so it is only asked about extensions nothing built in can read.
+Assimp is told to flatten the scene (apply every node's transform, discard
+the hierarchy), which is what makes a file in any of those formats look like
+a termesh `Model`; the price is that animation does not come through.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle
@@ -1211,6 +1307,11 @@ and opens the outline at whatever it hit.
 - `test_lod.cpp` - every level a valid smaller mesh, borders and texture seams
   preserved, level selection by distance and resolution, levels following an
   animation, and the frame-rate governor's ladder.
+- `test_formats.cpp` - STL in both encodings (and the binary file that
+  starts with "solid"), PLY as text and in both byte orders, point clouds,
+  damaged and hostile files, the loader table, vertex colours in every
+  shading mode, and splats: round, sized by distance, never vanishing,
+  thinned when far away.
 - `test_stage.cpp` - the JSON reader (every type, escapes, errors with
   positions, deep nesting), camera paths (through the keys, smooth across a
   loop's join, turntables), scenes, and scene files: a complete one, each

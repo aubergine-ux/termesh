@@ -1,6 +1,7 @@
 #include "pipeline/renderer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -30,6 +31,13 @@ struct Renderer::GeometryPass {
     bool flat = false;  // Lit only: light once per face rather than per vertex
     int highlightItem = -1, highlightMesh = -1;
     const std::uint8_t* lodChoice = nullptr;  // per mesh of the draw list, or null for "all original"
+    int varyingCount = 0;                     // how many varyings each vertex carries
+    bool normalMaps = true;                   // whether the fragment shader will want tangents
+    bool textures = true;                     // whether textures are in use at all
+    bool points = false;                      // draw vertices as splats instead of triangles
+    float pointScale = 1.0f;
+    bool thinPoints = false;                       // allowed to draw only some of a distant cloud's points
+    float projectionX = 1.0f, projectionY = 1.0f;  // the projection's x and y scale: view units -> clip units
     bool cullBackfaces = true;
     // Draw translucent materials last, back to front, without depth writes.
     bool sortTranslucent = false;
@@ -51,6 +59,14 @@ namespace {
 constexpr int kUV = 0;
 constexpr int kDiffuse = 2, kSpecular = 5;            // Flat / Gouraud
 constexpr int kNormal = 2, kWorld = 5, kTangent = 8;  // per pixel
+// A per-vertex colour, for meshes that have one. Per pixel it takes the
+// tangent's place: a mesh uses the tangent only for normal mapping, and
+// where both are wanted the normal map wins (see buildGeometry). In the
+// vertex-lit layout it goes on the end, and those frames carry three more
+// varyings - but only frames that actually contain coloured vertices.
+constexpr int kPixelColor = kTangent, kLitColor = 8;
+constexpr int kLitColorVaryingCount = 11;
+constexpr int kPointsPerChunk = 256;
 constexpr int kDepthVaryingCount = 2;
 constexpr int kLitVaryingCount = 8;
 constexpr int kPerPixelVaryingCount = 11;
@@ -91,9 +107,12 @@ const Environment& defaultEnvironment() {
 // shadow casting).
 bool isSolid(const Renderer::MaterialRef& ref, const RasterTriangle& tri, const Fragment& frag) {
     const Material& material = *ref.material;
+    // A splat is a square; only the disc inside it is solid.
+    if (tri.splat && frag.varyings[kUV] * frag.varyings[kUV] + frag.varyings[kUV + 1] * frag.varyings[kUV + 1] > 1.0f)
+        return false;
     if (material.alphaMode == AlphaMode::Opaque) return true;
     float alpha = material.baseColor.w;
-    if (material.baseColorTexture >= 0)
+    if (material.baseColorTexture >= 0 && !tri.splat)
         alpha *=
             ref.textures[material.baseColorTexture].sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod).w;
     // Translucent surfaces count as solid once they are mostly opaque.
@@ -146,9 +165,10 @@ struct FragmentShader {
     Vec3 eye;
     ShadingMode mode;
     int lineWidth;
+    int varyings;  // how many varyings the triangles carry
     bool perPixelLighting, wireframe, textures, normalMaps;
 
-    int varyingCount() const { return perPixelLighting ? kPerPixelVaryingCount : kLitVaryingCount; }
+    int varyingCount() const { return varyings; }
 
     // In wireframe mode the triangles themselves only lay down depth (pushed
     // back a little, see rasterizeTile) and the edges are drawn over them.
@@ -156,7 +176,8 @@ struct FragmentShader {
 
     // Triangle interiors.
     bool operator()(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
-        if (!wireframe) return shade(tri, frag, out);
+        // (Splats have no edges to draw: in wireframe they stay as they are.)
+        if (!wireframe || tri.splat) return shade(tri, frag, out);
         // Leave the pixel looking empty, but still occupy the depth buffer so
         // that lines behind this surface stay hidden. Cut-outs remain
         // see-through.
@@ -174,12 +195,17 @@ struct FragmentShader {
         const Material& material = *ref.material;
         const float* v = frag.varyings;
         const Vec2 uv{v[kUV], v[kUV + 1]};
+        // A splat's "texture coordinates" are its own: -1 to 1 across the
+        // square. Keep the disc, and sample no textures with them.
+        if (tri.splat && uv.x * uv.x + uv.y * uv.y > 1.0f) return false;
+        const bool useTextures = textures && !tri.splat;
 
         // Base colour, and alpha cut-outs (leaves, fences, decals).
         Vec4 base = material.baseColor;
-        if (material.baseColorTexture >= 0 && (textures || material.alphaMode != AlphaMode::Opaque)) {
+        if (tri.vertexColor) base = Vec4(base.xyz() * load3(v + (perPixelLighting ? kPixelColor : kLitColor)), base.w);
+        if (material.baseColorTexture >= 0 && !tri.splat && (useTextures || material.alphaMode != AlphaMode::Opaque)) {
             const Vec4 texel = ref.textures[material.baseColorTexture].sample(uv, tri.lod);
-            if (textures) base = base * texel;
+            if (useTextures) base = base * texel;
             else base.w *= texel.w;
         }
         if (material.alphaMode == AlphaMode::Mask && base.w < material.alphaCutoff) return false;
@@ -187,7 +213,7 @@ struct FragmentShader {
         if (translucent && base.w <= 0.004f) return false;  // invisible: do not even touch the pixel
 
         float metallic = material.metallic, roughness = material.roughness, occlusion = 1.0f;
-        if (textures && material.metallicRoughnessTexture >= 0) {
+        if (useTextures && material.metallicRoughnessTexture >= 0) {
             const Vec4 mr = ref.textures[material.metallicRoughnessTexture].sample(uv, tri.lod);
             roughness *= mr.y;
             metallic *= mr.z;
@@ -200,7 +226,7 @@ struct FragmentShader {
             Vec3 n = normalize(load3(v + kNormal));
             if (tri.backFacing) n = -n;
 
-            if (normalMaps && material.normalTexture >= 0) {
+            if (normalMaps && material.normalTexture >= 0 && !tri.vertexColor && !tri.splat) {
                 // A normal map stores directions relative to the surface: x
                 // along the tangent (texture u), y along the bitangent, z
                 // along the surface normal. Rebuild that frame at this pixel
@@ -245,10 +271,13 @@ struct FragmentShader {
             color = combineBlinnPhong(light, base.xyz(), metallic, occlusion);
         }
 
-        Vec3 emissive = material.emissive;
-        if (textures && material.emissiveTexture >= 0)
-            emissive *= ref.textures[material.emissiveTexture].sample(uv, tri.lod).xyz();
-        color += emissive;
+        // An emissive texture says *where* a material glows; its factor only
+        // scales that. Without the texture (textures switched off, or a
+        // splat with no surface to map it to) the factor alone would make
+        // the whole thing glow, so such a material then does not glow at all.
+        if (material.emissiveTexture < 0) color += material.emissive;
+        else if (useTextures)
+            color += material.emissive * ref.textures[material.emissiveTexture].sample(uv, tri.lod).xyz();
 
         if (wireframe) color = lerp(color, Vec3(1.0f), 0.3f);
         // The selected mesh: mixed towards a warm highlight colour.
@@ -288,7 +317,7 @@ struct TriangleInfo {
     float tangentSign;
     bool twoSided, needsLod, blend;
     bool mirrored;  // the model transform flips the winding
-    bool highlight;
+    bool highlight, vertexColor, splat;
 };
 
 // Project three clip-space vertices to the screen and append the resulting
@@ -344,7 +373,10 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
     }
     tri.material = info.material;
     tri.tangentSign = info.tangentSign;
-    tri.backFacing = backFacing;
+    // (A splat faces the camera by construction, whichever way it winds.)
+    tri.backFacing = backFacing && !info.splat;
+    tri.vertexColor = info.vertexColor;
+    tri.splat = info.splat;
     tri.edgeMask = edgeMask;
     tri.blend = info.blend;
     tri.highlight = info.highlight;
@@ -378,7 +410,7 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
     ctx.maxX = pass.width * kSubpixelScale;
     ctx.maxY = pass.height * kSubpixelScale;
     ctx.cullBackfaces = pass.cullBackfaces;
-    ctx.varyingCount = varyingCountFor(pass.layout);
+    ctx.varyingCount = pass.varyingCount;
 
     std::size_t chunkCount = 0;
     std::uint32_t materialBase = 0;
@@ -408,13 +440,16 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
 
         for (std::size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex, ++meshOrdinal) {
             const Mesh& mesh = model.meshes[meshIndex];
-            if (mesh.indices.size() < 3) continue;
-            stats.trianglesSubmitted += mesh.indices.size() / 3;
+            // Points instead of triangles: always for a point cloud, and for
+            // any mesh when asked.
+            const bool splats = !mesh.vertices.empty() && (mesh.indices.empty() || pass.points);
+            if (!splats && mesh.indices.size() < 3) continue;
+            stats.trianglesSubmitted += splats ? mesh.vertices.size() * 2 : mesh.indices.size() / 3;
 
             // Level of detail: a coarser version of the mesh is just another
             // index list over the same vertices.
             const MeshLod* lod = nullptr;
-            if (pass.lodChoice && pass.lodChoice[meshOrdinal] > 0)
+            if (!splats && pass.lodChoice && pass.lodChoice[meshOrdinal] > 0)
                 lod = &item.accel->lods(meshIndex)[pass.lodChoice[meshOrdinal] - 1u];
             const std::vector<std::uint32_t>& indices = lod ? lod->indices : mesh.indices;
             const std::size_t triangleCount = indices.size() / 3;
@@ -438,7 +473,8 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
                 // (The BVH indexes the original triangles, so it cannot
                 // help with a simplified version - which is small anyway.)
                 const Bvh* bvh = item.accel->bvh(meshIndex);
-                if (side == Frustum::Side::Intersecting && bvh && !lod && triangleCount >= kMinTrianglesForBvhCulling) {
+                if (side == Frustum::Side::Intersecting && bvh && !lod && !splats &&
+                    triangleCount >= kMinTrianglesForBvhCulling) {
                     visible_.assign((triangleCount + 63) / 64, 0);
                     bvh->markVisible(frustum, visible_);
                     std::size_t kept = 0;
@@ -450,6 +486,24 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
 
             const Material& material = model.materials[mesh.material];
             const bool twoSided = material.doubleSided || !pass.cullBackfaces;
+            // Per-vertex colours ride in the tangent's slot, so a mesh that
+            // is being normal-mapped (which needs the tangent) goes without.
+            const bool hasColors = mesh.colors.size() == mesh.vertices.size();
+            // A textured mesh drawn as points has no surface to map the
+            // texture onto; instead each point takes the texture's colour
+            // at its own coordinates, which then travels as a vertex colour.
+            const Texture* pointTexture =
+                splats && !hasColors && pass.textures && mesh.hasUVs && material.baseColorTexture >= 0
+                    ? &model.textures[static_cast<std::size_t>(material.baseColorTexture)]
+                    : nullptr;
+            const bool vertexColor =
+                (hasColors || pointTexture) &&
+                (lit || (perPixel && !(pass.normalMaps && material.normalTexture >= 0 && !splats)));
+            auto colorOf = [&](std::size_t vertex) {
+                // A blurred level of the texture: a point stands for a patch
+                // of surface, not a single texel.
+                return hasColors ? mesh.colors[vertex] : pointTexture->sample(mesh.vertices[vertex].uv, -3.0f).xyz();
+            };
 
             // -------------------------------------------------- vertex stage
             // Every vertex is transformed exactly once, however many
@@ -471,17 +525,26 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
                     out.varyings[kUV] = in.uv.x;
                     out.varyings[kUV + 1] = in.uv.y;
                     if (perPixel) {
-                        store(out.varyings + kNormal, worldNormal(in));
-                        store(out.varyings + kWorld, worldPosition(in));
-                        store(out.varyings + kTangent,
-                              placed ? transformDirection(transform, in.tangent.xyz()) : in.tangent.xyz());
-                    } else if (lit && !flat) {
+                        const Vec3 position = worldPosition(in);
+                        // A point with no normal of its own (a bare point
+                        // cloud) is shaded as if it faced the camera.
+                        const bool bare = splats && lengthSquared(in.normal) < 1e-12f;
+                        store(out.varyings + kNormal, bare ? normalize(pass.eye - position) : worldNormal(in));
+                        store(out.varyings + kWorld, position);
+                        if (vertexColor) store(out.varyings + kPixelColor, colorOf(i));
+                        else
+                            store(out.varyings + kTangent,
+                                  placed ? transformDirection(transform, in.tangent.xyz()) : in.tangent.xyz());
+                    } else if (lit) {
+                        if (vertexColor) store(out.varyings + kLitColor, colorOf(i));
+                        // Flat-shaded triangles are lit per face, later.
+                        if (flat && !splats) continue;
                         // Gouraud: light the vertex now; the rasterizer will
                         // interpolate the result.
                         const Vec3 position = worldPosition(in);
                         const Vec3 toEye = normalize(pass.eye - position);
-                        Vec3 n = worldNormal(in);
-                        if (twoSided && dot(n, toEye) < 0.0f) n = -n;
+                        Vec3 n = splats && lengthSquared(in.normal) < 1e-12f ? toEye : worldNormal(in);
+                        if ((twoSided || splats) && dot(n, toEye) < 0.0f) n = -n;
                         const Lighting l = blinnPhong(*pass.lighting, position, n, toEye, material.roughness, false);
                         store(out.varyings + kDiffuse, l.diffuse);
                         store(out.varyings + kSpecular, l.specular);
@@ -492,7 +555,36 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
 
             // ----------------------------------------------- primitive setup
             t0 = std::chrono::steady_clock::now();
-            const int meshChunks = static_cast<int>((triangleCount + kTrianglesPerChunk - 1) / kTrianglesPerChunk);
+            // How many points to draw, and how big. A cloud so far away that
+            // its splats are smaller than a pixel is thinned: every k-th
+            // point is drawn, k times the area. (Clouds are shuffled when
+            // loaded, so every k-th point is an even sample.)
+            std::size_t pointStride = 1;
+            float pointRadius = 0.0f;
+            if (splats) {
+                const float itemScale = placed ? std::max({length(transform.c[0].xyz()), length(transform.c[1].xyz()),
+                                                           length(transform.c[2].xyz())})
+                                               : 1.0f;
+                pointRadius = std::max(mesh.pointRadius, 1e-9f) * pass.pointScale * itemScale;
+                if (pass.thinPoints && haveAccel && mesh.indices.empty() && mesh.vertices.size() > 20000) {
+                    const Bounds& box = item.accel->bounds(meshIndex);
+                    const float reach = box.radius() * itemScale;
+                    const float distance =
+                        std::max(length(transformPoint(transform, box.center()) - pass.eye) - reach, reach * 0.05f);
+                    const float pixels =
+                        pointRadius * 0.5f * static_cast<float>(pass.height) * pass.projectionY / distance;
+                    if (pixels < 0.5f) {
+                        pointStride = std::clamp(static_cast<std::size_t>(0.25f / (pixels * pixels)), std::size_t{1},
+                                                 std::size_t{64});
+                        pointRadius *= std::sqrt(static_cast<float>(pointStride));
+                    }
+                }
+            }
+            const std::size_t pointCount = splats ? (mesh.vertices.size() + pointStride - 1) / pointStride : 0;
+
+            const int meshChunks =
+                splats ? static_cast<int>((pointCount + kPointsPerChunk - 1) / kPointsPerChunk)
+                       : static_cast<int>((triangleCount + kTrianglesPerChunk - 1) / kTrianglesPerChunk);
             if (chunks_.size() < chunkCount + meshChunks) chunks_.resize(chunkCount + meshChunks);
             if (chunkBlends_.size() < chunks_.size()) chunkBlends_.resize(chunks_.size());
 
@@ -504,80 +596,143 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
             // A negative mesh index selects every mesh of the item.
             meshInfo.highlight = static_cast<int>(itemIndex) == pass.highlightItem &&
                                  (pass.highlightMesh < 0 || static_cast<int>(meshIndex) == pass.highlightMesh);
-            meshInfo.needsLod =
-                mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
-                                material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
+            meshInfo.vertexColor = vertexColor;
+            meshInfo.splat = splats;
+            meshInfo.needsLod = !splats && mesh.hasUVs &&
+                                (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
+                                 material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
+            if (splats) meshInfo.twoSided = true;
             for (int chunk = 0; chunk < meshChunks; ++chunk) chunkBlends_[chunkCount + chunk] = meshInfo.blend;
 
-            pool_.parallelFor(meshChunks, [&](int chunk) {
-                TriangleInfo info = meshInfo;  // per-thread copy; tangentSign varies per triangle
-                std::vector<RasterTriangle>& out = chunks_[chunkCount + chunk];
-                out.clear();
-                const std::size_t begin = static_cast<std::size_t>(chunk) * kTrianglesPerChunk;
-                const std::size_t end = std::min(begin + kTrianglesPerChunk, triangleCount);
+            // Point splats.
+            //
+            // Each point becomes a small square facing the camera, built
+            // directly in clip space: the same offset is added to x and y
+            // before the perspective divide, so nearer points come out
+            // larger, as they should. Its corners carry (-1,-1) .. (1,1)
+            // where texture coordinates would be, and the fragment shader
+            // keeps only the disc inside the unit circle. Two triangles
+            // then go down the ordinary path - clipping, binning, depth
+            // test, shading - like any others.
+            if (splats)
+                pool_.parallelFor(meshChunks, [&](int chunk) {
+                    TriangleInfo info = meshInfo;
+                    info.tangentSign = 1.0f;
+                    std::vector<RasterTriangle>& out = chunks_[chunkCount + chunk];
+                    out.clear();
+                    const std::size_t begin = static_cast<std::size_t>(chunk) * kPointsPerChunk;
+                    const std::size_t end = std::min(begin + kPointsPerChunk, pointCount);
+                    for (std::size_t n = begin; n < end; ++n) {
+                        const ClipVertex& centre = clipVertices_[n * pointStride];
+                        const float w = centre.position.w;
+                        if (w <= 0.0f) continue;  // behind the camera
+                        // Never less than three quarters of a pixel in radius:
+                        // a disc that size always contains a pixel centre,
+                        // so distant points cannot flicker in and out.
+                        const float dx = std::max(pointRadius * pass.projectionX, 1.5f * w / ctx.width);
+                        const float dy = std::max(pointRadius * pass.projectionY, 1.5f * w / ctx.height);
 
-                for (std::size_t tri = begin; tri < end; ++tri) {
-                    if (useVisibility && !((visible_[tri >> 6] >> (tri & 63)) & 1)) continue;
-                    const std::uint32_t i0 = indices[tri * 3];
-                    const std::uint32_t i1 = indices[tri * 3 + 1];
-                    const std::uint32_t i2 = indices[tri * 3 + 2];
+                        static constexpr float cornerX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+                        static constexpr float cornerY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+                        ClipVertex quad[4];
+                        unsigned codes[4];
+                        for (int k = 0; k < 4; ++k) {
+                            quad[k] = centre;
+                            quad[k].position.x += cornerX[k] * dx;
+                            quad[k].position.y += cornerY[k] * dy;
+                            quad[k].varyings[kUV] = cornerX[k];
+                            quad[k].varyings[kUV + 1] = cornerY[k];
+                            codes[k] = clipOutcode(quad[k].position);
+                        }
+                        if (codes[0] & codes[1] & codes[2] & codes[3]) continue;
 
-                    // Trivial rejection: all three vertices outside one plane.
-                    const unsigned c0 = clipOutcode(clipVertices_[i0].position);
-                    const unsigned c1 = clipOutcode(clipVertices_[i1].position);
-                    const unsigned c2 = clipOutcode(clipVertices_[i2].position);
-                    if (c0 & c1 & c2) continue;
-
-                    info.tangentSign = mesh.vertices[i0].tangent.w;
-
-                    ClipVertex polygon[kMaxClipVertices];
-                    const ClipVertex* verts[3] = {&clipVertices_[i0], &clipVertices_[i1], &clipVertices_[i2]};
-
-                    if (flat) {
-                        // Flat shading: one normal - the true geometric
-                        // normal of the face - and one lighting evaluation
-                        // at its centre, copied to all three corners.
-                        const Vec3 p0 = worldPosition(mesh.vertices[i0]);
-                        const Vec3 p1 = worldPosition(mesh.vertices[i1]);
-                        const Vec3 p2 = worldPosition(mesh.vertices[i2]);
-                        Vec3 n = normalize(cross(p1 - p0, p2 - p0), worldNormal(mesh.vertices[i0]));
-                        if (mirrored) n = -n;
-                        const Vec3 centre = (p0 + p1 + p2) * (1.0f / 3.0f);
-                        const Vec3 toEye = normalize(pass.eye - centre);
-                        if (twoSided && dot(n, toEye) < 0.0f) n = -n;
-                        const Lighting l = blinnPhong(*pass.lighting, centre, n, toEye, material.roughness, false);
-                        for (int k = 0; k < 3; ++k) {
-                            polygon[k] = *verts[k];
-                            store(polygon[k].varyings + kDiffuse, l.diffuse);
-                            store(polygon[k].varyings + kSpecular, l.specular);
-                            verts[k] = &polygon[k];
+                        for (const auto& corners : {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{0, 2, 3}}) {
+                            const unsigned crossed = codes[corners[0]] | codes[corners[1]] | codes[corners[2]];
+                            if (crossed == 0) {
+                                const ClipVertex* verts[3] = {&quad[corners[0]], &quad[corners[1]], &quad[corners[2]]};
+                                emitTriangle(verts, 0, info, ctx, out);
+                                continue;
+                            }
+                            ClipVertex polygon[kMaxClipVertices] = {quad[corners[0]], quad[corners[1]],
+                                                                    quad[corners[2]]};
+                            const int count = clipPolygon(polygon, 3, crossed, ctx.varyingCount);
+                            for (int k = 1; k + 1 < count; ++k) {
+                                const ClipVertex* fan[3] = {&polygon[0], &polygon[k], &polygon[k + 1]};
+                                emitTriangle(fan, 0, info, ctx, out);
+                            }
                         }
                     }
+                });
+            else
+                pool_.parallelFor(meshChunks, [&](int chunk) {
+                    TriangleInfo info = meshInfo;  // per-thread copy; tangentSign varies per triangle
+                    std::vector<RasterTriangle>& out = chunks_[chunkCount + chunk];
+                    out.clear();
+                    const std::size_t begin = static_cast<std::size_t>(chunk) * kTrianglesPerChunk;
+                    const std::size_t end = std::min(begin + kTrianglesPerChunk, triangleCount);
 
-                    const unsigned crossed = c0 | c1 | c2;
-                    if (crossed == 0) {
-                        // Entirely inside the frustum - the common case.
-                        emitTriangle(verts, 0b111, info, ctx, out);
-                        continue;
-                    }
+                    for (std::size_t tri = begin; tri < end; ++tri) {
+                        if (useVisibility && !((visible_[tri >> 6] >> (tri & 63)) & 1)) continue;
+                        const std::uint32_t i0 = indices[tri * 3];
+                        const std::uint32_t i1 = indices[tri * 3 + 1];
+                        const std::uint32_t i2 = indices[tri * 3 + 2];
 
-                    // Straddles the frustum: clip, then triangulate the
-                    // resulting convex polygon as a fan around its first
-                    // vertex.
-                    if (!flat)
-                        for (int k = 0; k < 3; ++k) polygon[k] = *verts[k];
-                    const int n = clipPolygon(polygon, 3, crossed, ctx.varyingCount);
-                    for (int k = 1; k + 1 < n; ++k) {
-                        const ClipVertex* fan[3] = {&polygon[0], &polygon[k], &polygon[k + 1]};
-                        // Only the polygon's outline counts as an edge for
-                        // wireframe; the fan's internal diagonals do not.
-                        std::uint8_t edges = 0b001;
-                        if (k + 1 == n - 1) edges |= 0b010;
-                        if (k == 1) edges |= 0b100;
-                        emitTriangle(fan, edges, info, ctx, out);
+                        // Trivial rejection: all three vertices outside one plane.
+                        const unsigned c0 = clipOutcode(clipVertices_[i0].position);
+                        const unsigned c1 = clipOutcode(clipVertices_[i1].position);
+                        const unsigned c2 = clipOutcode(clipVertices_[i2].position);
+                        if (c0 & c1 & c2) continue;
+
+                        info.tangentSign = mesh.vertices[i0].tangent.w;
+
+                        ClipVertex polygon[kMaxClipVertices];
+                        const ClipVertex* verts[3] = {&clipVertices_[i0], &clipVertices_[i1], &clipVertices_[i2]};
+
+                        if (flat) {
+                            // Flat shading: one normal - the true geometric
+                            // normal of the face - and one lighting evaluation
+                            // at its centre, copied to all three corners.
+                            const Vec3 p0 = worldPosition(mesh.vertices[i0]);
+                            const Vec3 p1 = worldPosition(mesh.vertices[i1]);
+                            const Vec3 p2 = worldPosition(mesh.vertices[i2]);
+                            Vec3 n = normalize(cross(p1 - p0, p2 - p0), worldNormal(mesh.vertices[i0]));
+                            if (mirrored) n = -n;
+                            const Vec3 centre = (p0 + p1 + p2) * (1.0f / 3.0f);
+                            const Vec3 toEye = normalize(pass.eye - centre);
+                            if (twoSided && dot(n, toEye) < 0.0f) n = -n;
+                            const Lighting l = blinnPhong(*pass.lighting, centre, n, toEye, material.roughness, false);
+                            for (int k = 0; k < 3; ++k) {
+                                polygon[k] = *verts[k];
+                                store(polygon[k].varyings + kDiffuse, l.diffuse);
+                                store(polygon[k].varyings + kSpecular, l.specular);
+                                verts[k] = &polygon[k];
+                            }
+                        }
+
+                        const unsigned crossed = c0 | c1 | c2;
+                        if (crossed == 0) {
+                            // Entirely inside the frustum - the common case.
+                            emitTriangle(verts, 0b111, info, ctx, out);
+                            continue;
+                        }
+
+                        // Straddles the frustum: clip, then triangulate the
+                        // resulting convex polygon as a fan around its first
+                        // vertex.
+                        if (!flat)
+                            for (int k = 0; k < 3; ++k) polygon[k] = *verts[k];
+                        const int n = clipPolygon(polygon, 3, crossed, ctx.varyingCount);
+                        for (int k = 1; k + 1 < n; ++k) {
+                            const ClipVertex* fan[3] = {&polygon[0], &polygon[k], &polygon[k + 1]};
+                            // Only the polygon's outline counts as an edge for
+                            // wireframe; the fan's internal diagonals do not.
+                            std::uint8_t edges = 0b001;
+                            if (k + 1 == n - 1) edges |= 0b010;
+                            if (k == 1) edges |= 0b100;
+                            emitTriangle(fan, edges, info, ctx, out);
+                        }
                     }
-                }
-            });
+                });
             chunkCount += meshChunks;
             stats.setupMs += msSince(t0);
         }
@@ -664,8 +819,12 @@ void Renderer::renderShadowMap(std::span<const DrawItem> items, const Light& lig
     pass.viewProjection = map.viewProjection;
     pass.width = pass.height = size;
     pass.layout = VaryingLayout::DepthOnly;
+    pass.varyingCount = varyingCountFor(pass.layout);
     pass.cullBackfaces = settings.cullBackfaces;
     pass.lodChoice = lodChoice;
+    pass.points = settings.points;
+    pass.pointScale = settings.pointScale;
+    pass.projectionX = pass.projectionY = map.projectionScale;
 
     // The shadow pass's triangle counts and timings are reported as one
     // number, not mixed into the main view's.
@@ -813,6 +972,20 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     pass.highlightItem = settings.highlightItem;
     pass.highlightMesh = settings.highlightMesh;
     pass.lodChoice = lodChoice;
+    pass.normalMaps = settings.normalMaps;
+    pass.textures = settings.textures;
+    pass.points = settings.points;
+    pass.pointScale = settings.pointScale;
+    pass.thinPoints = settings.lodTolerance > 0.0f;
+    pass.projectionX = camera.projection.c[0].x;
+    pass.projectionY = camera.projection.c[1].y;
+    // Vertex-lit frames grow three varyings wider only if something in
+    // them has per-vertex colours.
+    pass.varyingCount = varyingCountFor(pass.layout);
+    if (!perPixel)
+        for (const DrawItem& item : items)
+            for (const Mesh& mesh : item.model->meshes)
+                if (!mesh.colors.empty() || settings.points) pass.varyingCount = kLitColorVaryingCount;
     buildGeometry(items, pass, stats);
 
     // ------------------------------------------------------------ rasterization
@@ -826,6 +999,7 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
         shader.eye = camera.position;
         shader.mode = settings.shading;
         shader.lineWidth = lineWidth;
+        shader.varyings = pass.varyingCount;
         shader.perPixelLighting = perPixel;
         shader.wireframe = settings.wireframe;
         shader.textures = settings.textures;

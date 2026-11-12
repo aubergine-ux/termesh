@@ -1,6 +1,7 @@
 #include "scene/model.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace termesh {
@@ -96,12 +97,78 @@ void computeTangents(Mesh& mesh) {
     }
 }
 
+float estimatePointRadius(const Mesh& mesh) {
+    const std::size_t count = mesh.vertices.size();
+    if (count < 2) return 0.01f;
+
+    // A triangle mesh: its area shared out among its vertices.
+    if (!mesh.indices.empty()) {
+        double area = 0.0;
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const Vec3 a = mesh.vertices[mesh.indices[i]].position;
+            area += 0.5 * length(cross(mesh.vertices[mesh.indices[i + 1]].position - a,
+                                       mesh.vertices[mesh.indices[i + 2]].position - a));
+        }
+        return std::max(0.45f * std::sqrt(static_cast<float>(area / static_cast<double>(count))), 1e-6f);
+    }
+
+    // A point cloud: the typical distance from a point to its nearest
+    // neighbour. Measuring that exactly needs a spatial index; an estimate
+    // is enough here. Take a few hundred points and find each one's nearest
+    // neighbour among a subset of the cloud. In a subset the neighbours are
+    // further apart than in the whole - for points on a surface, by the
+    // square root of the ratio of their numbers - so scale back by that.
+    const std::size_t subset = std::min<std::size_t>(count, 20000), samples = std::min<std::size_t>(count, 400);
+    const std::size_t subsetStep = count / subset, sampleStep = count / samples;
+    std::vector<float> nearest;
+    nearest.reserve(samples);
+    for (std::size_t s = 0; s < samples; ++s) {
+        const std::size_t self = s * sampleStep;
+        const Vec3 p = mesh.vertices[self].position;
+        float best = std::numeric_limits<float>::max();
+        for (std::size_t k = 0; k < subset; ++k) {
+            const std::size_t other = k * subsetStep;
+            if (other == self) continue;
+            const float d = lengthSquared(mesh.vertices[other].position - p);
+            if (d > 0.0f && d < best) best = d;  // coincident points say nothing about spacing
+        }
+        if (best < std::numeric_limits<float>::max()) nearest.push_back(std::sqrt(best));
+    }
+    if (nearest.empty()) return 0.01f;
+    std::nth_element(nearest.begin(), nearest.begin() + static_cast<std::ptrdiff_t>(nearest.size() / 2), nearest.end());
+    const float spacing =
+        nearest[nearest.size() / 2] * std::sqrt(static_cast<float>(subset) / static_cast<float>(count));
+    // Half as much again as the typical gap: scattered points are unevenly
+    // spaced, and discs of exactly the median gap would leave holes.
+    return std::max(spacing * 1.5f, 1e-6f);
+}
+
+void shufflePoints(Mesh& mesh) {
+    // Fisher-Yates, driven by a small fixed-seed generator so that the same
+    // file always loads the same way.
+    std::uint64_t state = 0x9E3779B97F4A7C15ull;
+    auto next = [&] {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    const bool hasColors = mesh.colors.size() == mesh.vertices.size();
+    for (std::size_t i = mesh.vertices.size(); i > 1; --i) {
+        const std::size_t j = static_cast<std::size_t>(next() % i);
+        std::swap(mesh.vertices[i - 1], mesh.vertices[j]);
+        if (hasColors) std::swap(mesh.colors[i - 1], mesh.colors[j]);
+    }
+}
+
 void finalizeModel(Model& model) {
     if (model.materials.empty()) model.materials.emplace_back();
     const int count = static_cast<int>(model.materials.size());
     for (Mesh& mesh : model.meshes) {
         if (mesh.material < 0 || mesh.material >= count) mesh.material = 0;
         if (mesh.name.empty()) mesh.name = model.materials[static_cast<std::size_t>(mesh.material)].name;
+        if (mesh.colors.size() != mesh.vertices.size()) mesh.colors.clear();
+        if (mesh.pointRadius <= 0.0f) mesh.pointRadius = estimatePointRadius(mesh);
     }
     const int textures = static_cast<int>(model.textures.size());
     for (Material& m : model.materials) {

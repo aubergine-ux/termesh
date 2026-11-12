@@ -67,6 +67,11 @@ struct RenderSettings {
     // measured in output pixels (outline width, bloom reach) can scale.
     float pixelScale = 1.0f;
 
+    // Draw every mesh as points: one splat per vertex. (Point clouds, which
+    // have nothing but vertices, are always drawn this way.)
+    bool points = false;
+    float pointScale = 1.0f;  // multiplies every splat's radius
+
     // Level of detail. A mesh that has coarser versions (ModelAccel::lods)
     // is drawn with the coarsest one whose error, projected to the screen,
     // is at most this many framebuffer pixels. 0 always draws the original.

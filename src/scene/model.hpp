@@ -58,6 +58,17 @@ struct Mesh {
     int material = 0;
     bool hasUVs = false;
     MeshRig rig;  // empty for static meshes
+
+    // Optional per-vertex colours (linear RGB), one per vertex. They
+    // multiply the material's base colour. Scans and point clouds usually
+    // carry their colour this way rather than in a texture.
+    std::vector<Vec3> colors;
+
+    // A mesh with vertices but no triangles is a point cloud: each vertex is
+    // drawn as a small disc facing the camera (a "splat") of this radius,
+    // in the mesh's units. Filled in by finalizeModel if left at 0.
+    float pointRadius = 0.0f;
+    bool isPointCloud() const { return indices.empty() && !vertices.empty(); }
 };
 
 struct Bounds {
@@ -93,7 +104,16 @@ void computeNormals(Mesh& mesh);
 void computeTangents(Mesh& mesh);
 
 // Make sure the model has at least one material and that every mesh refers to
-// a valid one.
+// a valid one, and work out a splat radius for each mesh.
 void finalizeModel(Model& model);
+
+// A radius for drawing a mesh's vertices as splats: about the typical gap
+// between neighbouring points, so that the discs just overlap.
+float estimatePointRadius(const Mesh& mesh);
+
+// Put a point cloud's points in random order. Any prefix of a shuffled
+// cloud is an even sample of the whole, which is what lets a distant cloud
+// be drawn with only some of its points.
+void shufflePoints(Mesh& mesh);
 
 }  // namespace termesh

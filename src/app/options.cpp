@@ -20,7 +20,7 @@ std::string usageText() {
                        " - 3D model viewer for the terminal\n"
                        "\n"
                        "Usage:\n"
-                       "  termesh [options] <model.obj | model.gltf | model.glb> [more models...]\n"
+                       "  termesh [options] <model.obj | .gltf | .glb | .stl | .ply> [more models...]\n"
                        "  termesh [options] <scene.json>\n"
                        "  termesh [options] --demo <name>\n"
                        "\n"
@@ -37,6 +37,8 @@ std::string usageText() {
                        "      --no-textures      ignore textures\n"
                        "      --no-normal-maps   ignore normal maps\n"
                        "      --no-cull          draw back faces too\n"
+                       "      --points           draw every mesh as points, one splat per vertex\n"
+                       "      --point-size <x>   scale the splats of point clouds (default: 1)\n"
                        "      --bg <rrggbb>      background colour\n"
                        "      --ssaa <n>         supersampling factor, 1-4 (default: depends on backend)\n"
                        "      --threads <n>      worker threads (default: all cores)\n"
@@ -122,7 +124,8 @@ std::string usageText() {
            "  x                      shadows          e  y        next environment, sky background\n"
            "  u  g  i  f             ambient occlusion, bloom (glow), ink outlines, FXAA\n"
            "  z                      next tone curve  {  }        exposure down / up\n"
-           "  d                      next dithering mode\n";
+           "  d                      next dithering mode\n"
+           "  P  (  )                draw as points; smaller / larger points\n";
 }
 
 RenderSettings makeRenderSettings(const Options& options) {
@@ -132,6 +135,8 @@ RenderSettings makeRenderSettings(const Options& options) {
     settings.textures = options.textures;
     settings.normalMaps = options.normalMaps;
     settings.cullBackfaces = options.cullBackfaces;
+    settings.points = options.points;
+    settings.pointScale = options.pointSize;
     settings.background = options.background;
     settings.shadows = options.shadows;
     settings.shadowMapSize = options.shadowMapSize;
@@ -391,6 +396,7 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         else if (name == "--no-textures") o.textures = false;
         else if (name == "--no-normal-maps") o.normalMaps = false;
         else if (name == "--no-cull") o.cullBackfaces = false;
+        else if (name == "--points") o.points = true;
         else if (name == "--no-stats") o.stats = false;
         else if (name == "--spin") o.spin = o.spinExplicit = true;
         else if (name == "--paused") o.animationPaused = true;
@@ -457,6 +463,9 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         } else if (name == "--fps") {
             if (!needValue()) return missing();
             if (!intOption(o.fpsLimit, 1, 1000)) return invalid();
+        } else if (name == "--point-size") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.pointSize) || o.pointSize <= 0.0f || o.pointSize > 100.0f) return invalid();
         } else if (name == "--camera-time") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.cameraTime) || o.cameraTime < 0.0f) return invalid();

@@ -8,6 +8,7 @@ project(termesh
 option(TERMESH_BUILD_TESTS "Build the unit tests" ON)
 option(TERMESH_NATIVE "Optimise for the build machine's CPU (-march=native)" OFF)
 option(TERMESH_STATIC "Link the C/C++ runtime statically (for release binaries)" OFF)
+option(TERMESH_ASSIMP "Read more formats (FBX, COLLADA, 3DS, ...) through the Assimp library" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,7 +84,9 @@ add_library(termesh_core STATIC
     src/scene/loader.cpp
     src/scene/model.cpp
     src/scene/obj_loader.cpp
+    src/scene/ply_loader.cpp
     src/scene/primitives.cpp
+    src/scene/stl_loader.cpp
     src/stage/camera_path.cpp
     src/stage/scene.cpp
     src/stage/scene_file.cpp
@@ -99,6 +102,15 @@ target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSIO
 # packing saves: the shader measures about 10% slower with it on.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set_source_files_properties(src/pipeline/renderer.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-slp-vectorize)
+endif()
+
+# The optional Assimp backend. Everything termesh needs is in the tree; this
+# trades that for several dozen more file formats.
+if(TERMESH_ASSIMP)
+    find_package(assimp REQUIRED)
+    target_sources(termesh_core PRIVATE src/scene/assimp_loader.cpp)
+    target_link_libraries(termesh_core PUBLIC assimp::assimp)
+    target_compile_definitions(termesh_core PUBLIC TERMESH_HAS_ASSIMP)
 endif()
 
 if(TERMESH_NATIVE AND NOT MSVC)
@@ -123,6 +135,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_anim.cpp
         tests/test_app.cpp
         tests/test_clip.cpp
+        tests/test_formats.cpp
         tests/test_input.cpp
         tests/test_inspector.cpp
         tests/test_lod.cpp

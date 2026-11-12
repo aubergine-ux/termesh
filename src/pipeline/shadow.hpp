@@ -49,6 +49,9 @@ struct ShadowMap {
     // light. perspectiveScale = 0 means orthographic.
     float depthPerWorld = 1.0f;
     float perspectiveScale = 0.0f;
+    // How the light's projection scales x and y (view units to clip units):
+    // needed to size point splats in the shadow pass.
+    float projectionScale = 1.0f;
 
     bool valid() const { return target.width() > 0; }
 
@@ -118,6 +121,7 @@ inline void aimShadowMap(ShadowMap& map, const Light& light, Vec3 center, float 
         // depth = 0.5 * (a + b / w) + 0.5 with b = -projection.c[3].z, so a
         // step of one world unit along the ray changes depth by 0.5 b / w^2.
         map.perspectiveScale = -0.5f * projection.c[3].z;
+        map.projectionScale = projection.c[1].y;
         return;
     }
     // Stand far enough back along the rays that the whole scene is in front.
@@ -126,6 +130,7 @@ inline void aimShadowMap(ShadowMap& map, const Light& light, Vec3 center, float 
     map.viewProjection = orthographic(-radius, radius, -radius, radius, zNear, zFar) * lookAt(eye, center, up);
     map.perspectiveScale = 0.0f;
     map.depthPerWorld = 1.0f / (zFar - zNear);
+    map.projectionScale = 1.0f / radius;
 }
 
 }  // namespace termesh

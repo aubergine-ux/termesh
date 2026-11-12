@@ -446,6 +446,9 @@ int main(int argc, char** argv) {
     }
     if (options.showVersion) {
         std::printf("termesh %s\n", TERMESH_VERSION);
+#ifdef TERMESH_HAS_ASSIMP
+        std::printf("with the Assimp backend\n");
+#endif
         return 0;
     }
     if (options.benchmarkList) {

@@ -45,7 +45,11 @@ struct RasterTriangle {
     // Translucent: depth-tested against what is already there, but leaves the
     // depth buffer alone, so that surfaces behind it can still be blended in.
     bool blend = false;
-    bool highlight = false;  // belongs to the selected mesh
+    bool highlight = false;    // belongs to the selected mesh
+    bool vertexColor = false;  // carries a per-vertex colour among its varyings
+    // Half of a point splat: a camera-facing square whose first two
+    // varyings run from -1 to 1 across it, for cutting it down to a disc.
+    bool splat = false;
 };
 
 // What the fragment shader receives for one pixel.

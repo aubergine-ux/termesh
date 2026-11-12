@@ -74,7 +74,35 @@ jobs:
           "$bin" examples/showroom.json --print --backend ascii --color none --cols 70 --rows 24
           "$bin" examples/showroom.json --bench 20
           test -s showroom.png && test -s fly.gif
+          printf 'solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n' > tri.stl
+          printf 'ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n0 0 0 255 0 0\n1 0 0 0 255 0\n0 1 0 0 0 255\n1 1 1 255 255 0\n' > cloud.ply
+          "$bin" tri.stl --png stl.png --size 200x150
+          "$bin" cloud.ply --point-size 3 --png ply.png --size 200x150
+          "$bin" --demo knot --points --png points.png --size 200x150
+          "$bin" tri.stl cloud.ply --print --backend ascii --color none --cols 60 --rows 20
+          test -s stl.png && test -s ply.png && test -s points.png
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
+
+  # The optional backend: FBX, COLLADA and the rest through Assimp.
+  assimp:
+    name: Linux (Assimp backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Assimp
+        run: sudo apt-get update && sudo apt-get install -y libassimp-dev
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTERMESH_ASSIMP=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Load a format only Assimp reads
+        run: |
+          build/termesh --version | grep -q Assimp
+          printf 'OFF\n4 2 0\n0 0 0\n1 0 0\n1 1 0\n0 1 0\n3 0 1 2\n3 0 2 3\n' > square.off
+          build/termesh square.off --png off.png --size 200x150
+          test -s off.png
 
   # Catch performance regressions: build this commit and the one before it,
   # and compare the instructions each benchmark scene executes.

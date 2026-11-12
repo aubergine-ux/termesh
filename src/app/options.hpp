@@ -31,6 +31,8 @@ struct Options {
     bool textures = true;
     bool normalMaps = true;
     bool cullBackfaces = true;
+    bool points = false;     // draw every mesh as points, one splat per vertex
+    float pointSize = 1.0f;  // multiplies the size of point splats
     Color8 background{16, 17, 22, 255};
     int supersampling = 0;  // 0 = backend default
     int threads = 0;        // 0 = all hardware threads

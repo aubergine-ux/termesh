@@ -13,7 +13,7 @@
 // after that first pose and the model is exactly as if the transforms had
 // been baked in directly.
 //
-// Not supported: cameras, lights, vertex colours, secondary UV sets, more
+// Not supported: cameras, lights, line primitives, secondary UV sets, more
 // than four bones per vertex and compressed geometry (Draco / meshopt).
 #include <algorithm>
 #include <cstdlib>
@@ -317,9 +317,10 @@ struct GltfContext {
             warnedCompression = true;
             return;
         }
-        if (prim.type != cgltf_primitive_type_triangles && prim.type != cgltf_primitive_type_triangle_strip &&
-            prim.type != cgltf_primitive_type_triangle_fan)
-            return;  // points and lines
+        const bool points = prim.type == cgltf_primitive_type_points;
+        if (!points && prim.type != cgltf_primitive_type_triangles &&
+            prim.type != cgltf_primitive_type_triangle_strip && prim.type != cgltf_primitive_type_triangle_fan)
+            return;  // lines
 
         const cgltf_accessor* positions = findAttribute(prim, cgltf_attribute_type_position);
         if (!positions || positions->count == 0) return;
@@ -368,9 +369,23 @@ struct GltfContext {
             }
         }
 
+        // Per-vertex colours: three or four floats each, already linear.
+        if (const cgltf_accessor* colors = findAttribute(prim, cgltf_attribute_type_color)) {
+            const int components = static_cast<int>(cgltf_num_components(colors->type));
+            if ((components == 3 || components == 4) && unpack(colors, components)) {
+                mesh.colors.resize(count);
+                for (std::size_t i = 0; i < count; ++i) {
+                    const float* c = scratch.data() + i * static_cast<std::size_t>(components);
+                    mesh.colors[i] = {c[0], c[1], c[2]};
+                }
+            }
+        }
+
         // Indices - or, for non-indexed geometry, just 0, 1, 2, ...
         std::vector<std::uint32_t> raw;
-        if (prim.indices) {
+        if (points) {
+            // A point cloud has no triangles; every vertex is drawn.
+        } else if (prim.indices) {
             raw.resize(prim.indices->count);
             for (cgltf_size i = 0; i < prim.indices->count; ++i) {
                 raw[i] = static_cast<std::uint32_t>(cgltf_accessor_read_index(prim.indices, i));
@@ -381,7 +396,11 @@ struct GltfContext {
             for (std::size_t i = 0; i < count; ++i) raw[i] = static_cast<std::uint32_t>(i);
         }
 
-        if (prim.type == cgltf_primitive_type_triangles) {
+        if (points) {
+            // Points without normals are marked as such (see the renderer).
+            if (!hasNormals)
+                for (Vertex& v : mesh.vertices) v.normal = {0.0f, 0.0f, 0.0f};
+        } else if (prim.type == cgltf_primitive_type_triangles) {
             raw.resize(raw.size() / 3 * 3);
             mesh.indices = std::move(raw);
         } else if (prim.type == cgltf_primitive_type_triangle_strip) {
@@ -399,9 +418,9 @@ struct GltfContext {
                 mesh.indices.push_back(raw[i + 1]);
             }
         }
-        if (mesh.indices.empty()) return;
+        if (mesh.indices.empty() && !points) return;
 
-        if (!hasNormals) computeNormals(mesh);
+        if (!hasNormals && !points) computeNormals(mesh);
         if (!hasTangents && mesh.hasUVs) computeTangents(mesh);
 
         // ---- rig data: the rest shape, bone weights and morph targets ----
