@@ -40,6 +40,11 @@ struct TestShader {
 
     int varyingCount() const { return 1; }
     float depthSlopeBias() const { return 0.0f; }
+    bool shadeEdge(const RasterTriangle&, const Fragment& frag, Color8& out) const {
+        out = color;
+        out.g = static_cast<std::uint8_t>(std::clamp(frag.varyings[0], 0.0f, 1.0f) * 255.0f + 0.5f);
+        return true;
+    }
     bool operator()(const RasterTriangle&, const Fragment& frag, Color8& out) const {
         out = color;
         out.g = static_cast<std::uint8_t>(std::clamp(frag.varyings[0], 0.0f, 1.0f) * 255.0f + 0.5f);
@@ -237,6 +242,133 @@ TEST_CASE("raster: splitting the screen into tiles does not change the image") {
             rasterizeTile(tiled, {x, y, std::min(x + 7, 100), std::min(y + 13, 100)}, list.data(),
                           list.size(), shader);
     CHECK(whole.pixels() == tiled.pixels());
+}
+
+TEST_CASE("lines: an edge is an unbroken run of pixels, one per step along its major axis") {
+    Framebuffer fb = blank(64, 64);
+    RasterTriangle tri;
+    REQUIRE(makeTriangle({4.5f, 10.5f}, {58.5f, 30.5f}, {20.5f, 60.5f}, tri));
+    tri.edgeMask = 0b111;
+    const RasterTriangle* list[1] = {&tri};
+    rasterizeTileEdges(fb, {0, 0, 64, 64}, list, 1, TestShader{}, 1);
+
+    // The edge from (4.5, 10.5) to (58.5, 30.5) is x-major: every column
+    // from 4 to 57 must contain a pixel near the ideal line.
+    for (int x = 4; x <= 57; ++x) {
+        const int expected = static_cast<int>(std::floor(10.5f + (x + 0.5f - 4.5f) * 20.0f / 54.0f));
+        CAPTURE(x);
+        CHECK(fb.at(x, expected).a != 0);
+    }
+    // The edge from (20.5, 60.5) to (4.5, 10.5) is y-major: one pixel per row.
+    for (int y = 11; y <= 59; ++y) {
+        int hits = 0;
+        for (int x = 0; x < 24; ++x) hits += fb.at(x, y).a != 0;
+        CAPTURE(y);
+        CHECK(hits >= 1);
+    }
+}
+
+TEST_CASE("lines: shared edges, edge flags, width and tiling") {
+    // Two triangles sharing the edge p-q, described in opposite directions.
+    const ScreenVertex p{10.3f, 12.7f}, q{50.1f, 41.2f};
+    RasterTriangle left, right;
+    REQUIRE(makeTriangle(p, q, {12.0f, 50.0f}, left));
+    REQUIRE(makeTriangle(q, p, {52.0f, 8.0f}, right));
+    const TestShader shader;
+
+    // Flag only the edge that joins p and q (edge e is opposite vertex e).
+    auto fixed = [](float f) { return static_cast<std::int32_t>(std::floor(f * kSubpixelScale + 0.5f)); };
+    auto isEndpoint = [&](const RasterTriangle& tri, int v) {
+        return (tri.x[v] == fixed(p.x) && tri.y[v] == fixed(p.y)) || (tri.x[v] == fixed(q.x) && tri.y[v] == fixed(q.y));
+    };
+    auto sharedEdgeOnly = [&](RasterTriangle tri) {
+        tri.edgeMask = 0;
+        for (int e = 0; e < 3; ++e)
+            if (isEndpoint(tri, (e + 1) % 3) && isEndpoint(tri, (e + 2) % 3)) tri.edgeMask = static_cast<std::uint8_t>(1 << e);
+        return tri;
+    };
+    const RasterTriangle a = sharedEdgeOnly(left), b = sharedEdgeOnly(right);
+    REQUIRE(a.edgeMask != 0);
+    REQUIRE(b.edgeMask != 0);
+
+    Framebuffer fa = blank(64, 64), fb2 = blank(64, 64);
+    const RasterTriangle* la[1] = {&a};
+    const RasterTriangle* lb[1] = {&b};
+    rasterizeTileEdges(fa, {0, 0, 64, 64}, la, 1, shader, 1);
+    rasterizeTileEdges(fb2, {0, 0, 64, 64}, lb, 1, shader, 1);
+    CHECK(countCovered(fa) >= 39);
+    CHECK(fa.pixels() == fb2.pixels());  // both triangles light the same pixels
+
+    SUBCASE("edges that are not flagged are not drawn") {
+        RasterTriangle none = left;
+        none.edgeMask = 0;
+        Framebuffer f = blank(64, 64);
+        const RasterTriangle* l[1] = {&none};
+        rasterizeTileEdges(f, {0, 0, 64, 64}, l, 1, shader, 1);
+        CHECK(countCovered(f) == 0);
+    }
+    SUBCASE("a wider line covers proportionally more pixels") {
+        Framebuffer wide = blank(64, 64);
+        rasterizeTileEdges(wide, {0, 0, 64, 64}, la, 1, shader, 3);
+        CHECK(countCovered(wide) == 3 * countCovered(fa));
+    }
+    SUBCASE("drawing tile by tile gives the same picture") {
+        RasterTriangle all = left;
+        all.edgeMask = 0b111;
+        const RasterTriangle* l[1] = {&all};
+        Framebuffer whole = blank(64, 64), tiled = blank(64, 64);
+        rasterizeTileEdges(whole, {0, 0, 64, 64}, l, 1, shader, 2);
+        for (int y = 0; y < 64; y += 9)
+            for (int x = 0; x < 64; x += 11)
+                rasterizeTileEdges(tiled, {x, y, std::min(x + 11, 64), std::min(y + 9, 64)}, l, 1, shader, 2);
+        CHECK(whole.pixels() == tiled.pixels());
+    }
+    SUBCASE("a line behind existing geometry is hidden") {
+        Framebuffer f = blank(64, 64);
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) f.depthRow(y)[x] = 0.1f;  // something nearer everywhere
+        rasterizeTileEdges(f, {0, 0, 64, 64}, la, 1, shader, 1);
+        CHECK(countCovered(f) == 0);
+    }
+}
+
+TEST_CASE("renderer: wireframe outlines are closed") {
+    // Every row crossing the cube's silhouette must have a line pixel at its
+    // left and right extremes - the case the old "shade pixels near an edge"
+    // approach got wrong, leaving dotted outlines.
+    const Model model = makeDemoModel("cube");
+    ThreadPool pool(2);
+    Renderer renderer(pool);
+    OrbitCamera orbit;
+    orbit.frame(model.bounds());
+    const Camera camera = orbit.camera(160.0f / 120.0f);
+
+    RenderSettings solid, wire;
+    wire.wireframe = true;
+    Framebuffer filled(160, 120), lines(160, 120);
+    renderer.render(model, camera, solid, filled);
+    renderer.render(model, camera, wire, lines);
+
+    int rowsChecked = 0, broken = 0;
+    for (int y = 0; y < 120; ++y) {
+        int first = -1, last = -1;
+        for (int x = 0; x < 160; ++x)
+            if (filled.at(x, y).a != 0) {
+                if (first < 0) first = x;
+                last = x;
+            }
+        if (first < 0 || last - first < 6) continue;
+        ++rowsChecked;
+        // Allow a pixel of slack: lines are centred on the edge, fills stop at it.
+        bool leftOk = false, rightOk = false;
+        for (int d = -1; d <= 1; ++d) {
+            if (first + d >= 0 && first + d < 160) leftOk = leftOk || lines.at(first + d, y).a != 0;
+            if (last + d >= 0 && last + d < 160) rightOk = rightOk || lines.at(last + d, y).a != 0;
+        }
+        broken += !leftOk || !rightOk;
+    }
+    CHECK(rowsChecked > 50);
+    CHECK(broken == 0);
 }
 
 TEST_CASE("renderer: output does not depend on the number of threads") {
