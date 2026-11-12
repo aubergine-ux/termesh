@@ -698,3 +698,15 @@ TEST_CASE("json: numbers too large to use are refused") {
     CHECK(Json::parse("[1e20, -2.5e-30, 0]", json, error));
     CHECK(json[0].number() == doctest::Approx(1e20));
 }
+
+TEST_CASE("scene file: an absolute path is used as it is") {
+    TempDir models, scenes;
+    const std::string obj = models.write("tri.obj", "v -1 -1 0\nv 1 -1 0\nv 0 1 0\nf 1 2 3\n");
+    std::string escaped;
+    for (char c : obj) escaped += c == '\\' ? std::string("\\\\") : std::string(1, c);  // Windows paths, in JSON
+    const std::string file = scenes.write("scene.json", "{ \"models\": [ { \"file\": \"" + escaped + "\" } ] }");
+    const SceneLoadResult loaded = loadSceneFile(file);
+    REQUIRE_MESSAGE(loaded.ok, loaded.error);
+    CHECK(loaded.scene.objects.size() == 1);
+    CHECK(loaded.scene.triangleCount() == 1);
+}

@@ -1,5 +1,6 @@
 #include "stage/scene_file.hpp"
 
+#include <filesystem>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -13,6 +14,12 @@
 namespace termesh {
 
 namespace {
+
+// A path from a scene file: relative to the file's own directory, unless
+// it says exactly where it is.
+std::string resolvePath(const std::string& directory, const std::string& path) {
+    return std::filesystem::path(path).is_absolute() ? path : directory + path;
+}
 
 // Reading a scene is a long list of "this field, if present, must look like
 // that". The first thing that does not is reported with the path to it
@@ -108,11 +115,11 @@ struct Reader {
 
         if (json["file"].isString()) {
             const std::string file = json["file"].string();
-            LoadResult load = loadModel(directory + file);
+            LoadResult load = loadModel(resolvePath(directory, file));
             for (const std::string& warning : load.warnings) result.warnings.push_back(file + ": " + warning);
             if (!load.ok) return fail(where + ".file", load.error);
             loaded = std::move(load.model);
-            source = directory + file;
+            source = resolvePath(directory, file);
             if (name.empty()) name = detail::fileNameOf(file);
         } else if (json["demo"].isString()) {
             const std::string demo = json["demo"].string();
@@ -226,7 +233,7 @@ struct Reader {
         Scene& scene = result.scene;
         if (json["file"].isString()) {
             std::string error;
-            if (!loadEnvironment(directory + json["file"].string(), scene.environment, error))
+            if (!loadEnvironment(resolvePath(directory, json["file"].string()), scene.environment, error))
                 return fail(where + ".file", error);
             scene.hasEnvironment = true;
         } else if (json["name"].isString()) {

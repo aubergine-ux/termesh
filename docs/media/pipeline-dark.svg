@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 282" width="1000" height="282" role="img" aria-label="The rendering pipeline: model file, loader, animation, culling, shadow maps, vertex stage, clipping, setup, tile binning, rasterizer, shading, post-processing, resolve, backend, terminal">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e7681"/></marker></defs>
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace}</style>
+<rect x="14" y="14" width="172" height="62" rx="9" fill="#161b22" stroke="#a371f7" stroke-width="1.6"/>
+<text x="100.0" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">model file</text>
+<text x="100.0" y="59" text-anchor="middle" font-size="11" fill="#8d96a0">.obj .gltf .stl .ply</text>
+<line x1="189" y1="45.0" x2="211" y2="45.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="214" y="14" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="300.0" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">loader</text>
+<text x="300.0" y="59" text-anchor="middle" font-size="11" fill="#8d96a0">meshes, materials, rig</text>
+<line x1="389" y1="45.0" x2="411" y2="45.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="414" y="14" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="500.0" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">animation</text>
+<text x="500.0" y="59" text-anchor="middle" font-size="11" fill="#8d96a0">pose, skinning, morphs</text>
+<line x1="589" y1="45.0" x2="611" y2="45.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="614" y="14" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="700.0" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">culling</text>
+<text x="700.0" y="59" text-anchor="middle" font-size="11" fill="#8d96a0">BVH, frustum, LOD</text>
+<line x1="789" y1="45.0" x2="811" y2="45.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="814" y="14" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="900.0" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">shadow maps</text>
+<text x="900.0" y="59" text-anchor="middle" font-size="11" fill="#8d96a0">depth from each light</text>
+<line x1="900.0" y1="79" x2="900.0" y2="107" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="814" y="110" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="900.0" y="136" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">vertex stage</text>
+<text x="900.0" y="155" text-anchor="middle" font-size="11" fill="#8d96a0">to clip space</text>
+<line x1="811" y1="141.0" x2="789" y2="141.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="614" y="110" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="700.0" y="136" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">clipping</text>
+<text x="700.0" y="155" text-anchor="middle" font-size="11" fill="#8d96a0">homogeneous</text>
+<line x1="611" y1="141.0" x2="589" y2="141.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="414" y="110" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="500.0" y="136" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">setup</text>
+<text x="500.0" y="155" text-anchor="middle" font-size="11" fill="#8d96a0">divide, cull, snap</text>
+<line x1="411" y1="141.0" x2="389" y2="141.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="214" y="110" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="300.0" y="136" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">tile binning</text>
+<text x="300.0" y="155" text-anchor="middle" font-size="11" fill="#8d96a0">32 x 32 px</text>
+<line x1="211" y1="141.0" x2="189" y2="141.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="14" y="110" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="100.0" y="136" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">rasterizer</text>
+<text x="100.0" y="155" text-anchor="middle" font-size="11" fill="#8d96a0">SIMD edge functions</text>
+<line x1="100.0" y1="175" x2="100.0" y2="203" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="14" y="206" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="100.0" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">shading</text>
+<text x="100.0" y="251" text-anchor="middle" font-size="11" fill="#8d96a0">Phong, PBR, toon</text>
+<line x1="189" y1="237.0" x2="211" y2="237.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="214" y="206" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="300.0" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">post</text>
+<text x="300.0" y="251" text-anchor="middle" font-size="11" fill="#8d96a0">SSAO, bloom, tone map</text>
+<line x1="389" y1="237.0" x2="411" y2="237.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="414" y="206" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="500.0" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">resolve</text>
+<text x="500.0" y="251" text-anchor="middle" font-size="11" fill="#8d96a0">supersamples, FXAA</text>
+<line x1="589" y1="237.0" x2="611" y2="237.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="614" y="206" width="172" height="62" rx="9" fill="#161b22" stroke="#30363d" stroke-width="1.1"/>
+<text x="700.0" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">backend</text>
+<text x="700.0" y="251" text-anchor="middle" font-size="11" fill="#8d96a0">kitty ... ASCII</text>
+<line x1="789" y1="237.0" x2="811" y2="237.0" stroke="#6e7681" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="814" y="206" width="172" height="62" rx="9" fill="#161b22" stroke="#a371f7" stroke-width="1.6"/>
+<text x="900.0" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">terminal</text>
+<text x="900.0" y="251" text-anchor="middle" font-size="11" fill="#8d96a0">only changed cells</text>
+</svg>

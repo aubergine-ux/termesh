@@ -33,7 +33,11 @@ PhysicsDemo::PhysicsDemo(Scene& scene, int bodies, std::uint32_t seed) : scene_(
 
     // The floor is only something to look at: the world's ground plane is
     // what things land on.
-    scene.add(makeDemoModel("plane"), "floor", scale({kFloorSize, 1.0f, kFloorSize}));
+    Model floor = makeDemoModel("plane");
+    // A darker floor than the plane's own: it fills most of the picture, and
+    // the things on it should be what catches the eye.
+    for (Material& material : floor.materials) material.baseColor = {0.5f, 0.52f, 0.58f, 1.0f};
+    scene.add(std::move(floor), "floor", scale({kFloorSize, 1.0f, kFloorSize}));
     world_.groundExtent = kFloorSize;
 
     // A third of the bodies make a wall to knock down; the rest fall on it.
