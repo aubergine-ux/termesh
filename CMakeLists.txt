@@ -46,10 +46,25 @@ else()
     target_compile_options(termesh_third_party PRIVATE -w)
 endif()
 
+if(WIN32)
+    set(TERMESH_TERMINAL_SOURCE src/input/terminal_win.cpp)
+else()
+    set(TERMESH_TERMINAL_SOURCE src/input/terminal_posix.cpp)
+endif()
+
 add_library(termesh_core STATIC
+    src/app/capabilities.cpp
+    src/app/options.cpp
+    src/app/viewer.cpp
     src/core/texture.cpp
     src/core/thread_pool.cpp
-    src/output/halfblock.cpp
+    src/export/gif.cpp
+    src/export/offscreen.cpp
+    src/input/events.cpp
+    ${TERMESH_TERMINAL_SOURCE}
+    src/output/cell_backends.cpp
+    src/output/cell_grid.cpp
+    src/output/pixel_backends.cpp
     src/pipeline/clip.cpp
     src/pipeline/renderer.cpp
     src/pipeline/resolve.cpp

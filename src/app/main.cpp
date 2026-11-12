@@ -1,61 +1,223 @@
-// termesh - temporary driver: render a demo model to a PNG.
+// termesh - a 3D model viewer for the terminal.
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <string>
+#include <vector>
 
-#include <stb/stb_image_write.h>
-
-#include "core/image.hpp"
-#include "pipeline/renderer.hpp"
+#include "app/capabilities.hpp"
+#include "app/options.hpp"
+#include "app/viewer.hpp"
+#include "export/gif.hpp"
+#include "export/offscreen.hpp"
 #include "pipeline/resolve.hpp"
+#include "raster/simd.hpp"
 #include "scene/loader.hpp"
 #include "scene/primitives.hpp"
 
 using namespace termesh;
 
+namespace {
+
+// --png: one frame to an image file.
+int runPng(const Options& options, const Model& model, ThreadPool& pool) {
+    Renderer renderer(pool);
+    OffscreenTarget target;
+    if (options.width > 0) {
+        target.width = options.width;
+        target.height = options.height;
+    }
+    target.supersampling = options.supersampling > 0 ? options.supersampling : 2;
+    target.blocks = options.blocks;
+
+    RenderSettings settings = makeRenderSettings(options);
+    settings.wireWidth = 1.5f;
+    const Image image = renderOffscreen(renderer, pool, model, makeCamera(options, model), settings, target);
+    if (!writePng(options.pngPath, image)) {
+        std::fprintf(stderr, "termesh: could not write '%s'\n", options.pngPath.c_str());
+        return 1;
+    }
+    std::fprintf(stderr, "wrote %s (%dx%d)\n", options.pngPath.c_str(), image.width, image.height);
+    return 0;
+}
+
+// --gif: a full turn of the model as a looping animation.
+int runGif(const Options& options, const Model& model, ThreadPool& pool) {
+    Renderer renderer(pool);
+    OffscreenTarget target;
+    target.width = options.width > 0 ? options.width : 480;
+    target.height = options.height > 0 ? options.height : 360;
+    target.supersampling = options.supersampling > 0 ? options.supersampling : 3;
+    target.blocks = options.blocks;
+
+    RenderSettings settings = makeRenderSettings(options);
+    settings.wireWidth = 1.5f;
+    OrbitCamera camera = makeCamera(options, model);
+    const float startYaw = camera.yaw;
+    // Spin the same way as the interactive viewer; a negative speed reverses.
+    const float direction = options.spinSpeed < 0.0f ? -1.0f : 1.0f;
+
+    std::vector<Image> frames;
+    frames.reserve(static_cast<std::size_t>(options.frames));
+    for (int i = 0; i < options.frames; ++i) {
+        // The last frame stops one step short of a full turn, so the loop
+        // joins up without a repeated frame.
+        camera.yaw = startYaw + direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(options.frames);
+        frames.push_back(renderOffscreen(renderer, pool, model, camera, settings, target));
+        std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, options.frames);
+    }
+
+    std::fprintf(stderr, "\rencoding...                 ");
+    const GifPalette palette = buildGifPalette(frames);
+    GifWriter writer;
+    // GIF delays are whole hundredths of a second.
+    const int delayCs = std::max((100 + options.gifFps / 2) / options.gifFps, 2);
+    bool ok = writer.open(options.gifPath, frames[0].width, frames[0].height, palette, delayCs);
+    for (const Image& frame : frames) ok = ok && writer.addFrame(frame);
+    ok = writer.close() && ok;
+    if (!ok) {
+        std::fprintf(stderr, "\rtermesh: could not write '%s'\n", options.gifPath.c_str());
+        return 1;
+    }
+    std::fprintf(stderr, "\rwrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width,
+                 frames[0].height, options.frames);
+    return 0;
+}
+
+// --print: a single frame written into the terminal's normal scrollback.
+int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
+    TerminalCaps caps = capsFromEnvironment();
+    Terminal terminal;
+    const TerminalSize size = terminal.size();
+
+    // If we are attached to a real terminal, ask it what it supports.
+    if (Terminal::inputIsTerminal() && Terminal::outputIsTerminal() && terminal.enterRawMode()) {
+        InputParser parser;
+        probeTerminal(terminal, parser, caps);
+        terminal.leaveRawMode();
+    } else {
+        caps.kittyGraphics = false;  // cannot be confirmed without asking
+    }
+    if (options.color) caps.color = *options.color;
+    resolveCellSize(size, caps);
+
+    DrawArea area;
+    area.cols = options.cols > 0 ? options.cols : size.cols;
+    // By default, about as tall as it is wide, but never taller than the window.
+    const int squareRows = area.cols * caps.cellWidth / caps.cellHeight;
+    area.rows = options.rows > 0 ? options.rows : std::clamp(squareRows, 2, std::max(size.rows - 2, 2));
+    area.cellWidth = caps.cellWidth;
+    area.cellHeight = caps.cellHeight;
+
+    const BackendKind kind = options.backend.value_or(chooseBackend(caps));
+    const auto backend = makeBackend(kind, caps.color);
+    int width = 0, height = 0;
+    backend->configure(area, width, height);
+
+    int ssaa = options.supersampling > 0 ? options.supersampling : backend->defaultSupersampling();
+    while (ssaa > 1 && static_cast<std::int64_t>(width) * ssaa * height * ssaa > kMaxFramebufferPixels) --ssaa;
+
+    RenderSettings settings = makeRenderSettings(options);
+    settings.wireframe = settings.wireframe || backend->wantsWireframe();
+    settings.wireWidth = static_cast<float>(ssaa);
+
+    Renderer renderer(pool);
+    Framebuffer fb(width * ssaa, height * ssaa);
+    const float aspect = static_cast<float>(width) * backend->pixelAspect() / static_cast<float>(height);
+    renderer.render(model, makeCamera(options, model).camera(aspect), settings, fb);
+    Image image;
+    resolve(fb, ssaa, image, pool);
+
+    std::string out;
+    backend->print(image.view(), out);
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    std::fflush(stdout);
+    return 0;
+}
+
+// --bench: time the renderer alone, with no terminal in the way.
+int runBench(const Options& options, const Model& model, ThreadPool& pool) {
+    Renderer renderer(pool);
+    const int width = options.width > 0 ? options.width : 640;
+    const int height = options.height > 0 ? options.height : 360;
+    const int ssaa = options.supersampling > 0 ? options.supersampling : 1;
+    Framebuffer fb(width * ssaa, height * ssaa);
+    Image image;
+    RenderSettings settings = makeRenderSettings(options);
+    settings.wireWidth = static_cast<float>(ssaa);
+    OrbitCamera camera = makeCamera(options, model);
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+
+    RenderStats total;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < options.benchFrames; ++i) {
+        camera.yaw += radians(2.0f);
+        const RenderStats s = renderer.render(model, camera.camera(aspect), settings, fb);
+        resolve(fb, ssaa, image, pool);
+        total.vertexMs += s.vertexMs;
+        total.setupMs += s.setupMs;
+        total.rasterMs += s.rasterMs;
+        total.trianglesDrawn += s.trianglesDrawn;
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const double n = options.benchFrames;
+
+    std::printf("model        %s: %zu triangles, %zu vertices\n", model.name.c_str(), model.triangleCount(),
+                model.vertexCount());
+    std::printf("target       %dx%d, ssaa %d, %s shading%s, %u threads, %s\n", width, height, ssaa,
+                shadingModeName(settings.shading), settings.wireframe ? " (wireframe)" : "", pool.threadCount(),
+                simd::kName);
+    std::printf("frames       %d in %.2f s  ->  %.1f fps (%.2f ms/frame)\n", options.benchFrames, seconds, n / seconds,
+                seconds * 1000.0 / n);
+    std::printf("per frame    vertex %.2f ms, setup %.2f ms, raster %.2f ms, %.0f triangles drawn\n",
+                total.vertexMs / n, total.setupMs / n, total.rasterMs / n,
+                static_cast<double>(total.trianglesDrawn) / n);
+    return 0;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
-    const std::string name = argc > 1 ? argv[1] : "knot";
-    const std::string out = argc > 2 ? argv[2] : "out.png";
-    RenderSettings settings;
-    if (argc > 3) {
-        const std::string mode = argv[3];
-        if (mode == "flat") settings.shading = ShadingMode::Flat;
-        if (mode == "gouraud") settings.shading = ShadingMode::Gouraud;
-        if (mode == "wire") settings.wireframe = true;
+    const ParseResult parsed = parseOptions(argc, argv);
+    if (!parsed.ok) {
+        std::fprintf(stderr, "termesh: %s\nTry 'termesh --help'.\n", parsed.error.c_str());
+        return 2;
+    }
+    const Options& options = parsed.options;
+    if (options.showHelp) {
+        std::fputs(usageText().c_str(), stdout);
+        return 0;
+    }
+    if (options.showVersion) {
+        std::printf("termesh %s\n", TERMESH_VERSION);
+        return 0;
     }
 
     Model model;
-    if (name.find('.') != std::string::npos) {
-        LoadResult loaded = loadModel(name);
-        for (const auto& w : loaded.warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+    if (!options.demo.empty()) {
+        model = makeDemoModel(options.demo);
+        if (model.meshes.empty()) {
+            std::fprintf(stderr, "termesh: unknown demo '%s'\nTry 'termesh --help'.\n", options.demo.c_str());
+            return 2;
+        }
+    } else {
+        LoadResult loaded = loadModel(options.modelPath);
+        for (const std::string& warning : loaded.warnings)
+            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
         if (!loaded.ok) {
-            std::fprintf(stderr, "error: %s\n", loaded.error.c_str());
+            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
             return 1;
         }
         model = std::move(loaded.model);
-    } else {
-        model = makeDemoModel(name);
-    }
-    if (model.meshes.empty()) {
-        std::fprintf(stderr, "unknown demo model '%s'\n", name.c_str());
-        return 1;
     }
 
-    const int width = 960, height = 720, ssaa = 2;
-    ThreadPool pool;
-    Renderer renderer(pool);
-    Framebuffer fb(width * ssaa, height * ssaa);
-    OrbitCamera orbit;
-    orbit.frame(model.bounds());
-    settings.wireWidth = static_cast<float>(ssaa);
+    ThreadPool pool(static_cast<unsigned>(options.threads));
 
-    const RenderStats stats =
-        renderer.render(model, orbit.camera(static_cast<float>(width) / height), settings, fb);
-    Image image;
-    resolve(fb, ssaa, image, pool);
-    for (Color8& p : image.pixels) p.a = 255;
-    stbi_write_png(out.c_str(), width, height, 4, image.pixels.data(), width * 4);
-    std::printf("%zu/%zu tris, vertex %.2f ms, setup %.2f ms, raster %.2f ms\n", stats.trianglesDrawn,
-                stats.trianglesSubmitted, stats.vertexMs, stats.setupMs, stats.rasterMs);
-    return 0;
+    if (options.benchFrames > 0) return runBench(options, model, pool);
+    if (!options.pngPath.empty()) return runPng(options, model, pool);
+    if (!options.gifPath.empty()) return runGif(options, model, pool);
+    if (options.print) return runPrint(options, model, pool);
+
+    Viewer viewer(options, model, pool);
+    return viewer.run();
 }
