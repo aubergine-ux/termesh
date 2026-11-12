@@ -81,7 +81,43 @@ jobs:
           "$bin" --demo knot --points --png points.png --size 200x150
           "$bin" tri.stl cloud.ply --print --backend ascii --color none --cols 60 --rows 20
           test -s stl.png && test -s ply.png && test -s points.png
+          "$bin" --preview tri.stl --cols 40 --rows 12 --no-cache
+          "$bin" --preview examples/showroom.json --cols 40 --rows 12 --no-cache --color 256
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
+
+  # libtermesh as a client sees it: installed, then found through pkg-config
+  # and through CMake by a C program that knows nothing of this repository.
+  library:
+    name: Linux (libtermesh install)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and install
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DTERMESH_BUILD_TESTS=OFF
+          cmake --build build --parallel
+          cmake --install build --prefix "$PWD/prefix"
+      - name: Use it through pkg-config
+        run: |
+          export PKG_CONFIG_PATH="$PWD/prefix/lib/pkgconfig"
+          cc -std=c99 -Wall -Wextra -Wpedantic -Werror examples/c/render.c $(pkg-config --cflags --libs termesh) -o render
+          LD_LIBRARY_PATH="$PWD/prefix/lib" ./render > /dev/null
+      - name: Use it through CMake
+        run: |
+          mkdir consumer && cp examples/c/render.c consumer/
+          printf 'cmake_minimum_required(VERSION 3.20)\nproject(consumer C)\nfind_package(termesh REQUIRED)\nadd_executable(consumer render.c)\ntarget_link_libraries(consumer PRIVATE termesh::termesh)\n' > consumer/CMakeLists.txt
+          cmake -S consumer -B consumer/build -DCMAKE_PREFIX_PATH="$PWD/prefix"
+          cmake --build consumer/build
+          consumer/build/consumer > /dev/null
+      - name: The static library
+        run: |
+          cmake -B build-static -DCMAKE_BUILD_TYPE=Release -DTERMESH_LIBRARY_STATIC=ON
+          cmake --build build-static --parallel
+          ctest --test-dir build-static --output-on-failure
+          cmake --install build-static --prefix "$PWD/prefix-static"
+          export PKG_CONFIG_PATH="$PWD/prefix-static/lib/pkgconfig"
+          cc examples/c/render.c $(pkg-config --cflags --libs --static termesh) -o render-static
+          ./render-static > /dev/null
 
   # The optional backend: FBX, COLLADA and the rest through Assimp.
   assimp:

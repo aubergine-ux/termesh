@@ -1249,6 +1249,83 @@ Assimp is told to flatten the scene (apply every node's transform, discard
 the hierarchy), which is what makes a file in any of those formats look like
 a termesh `Model`; the price is that animation does not come through.
 
+## 26. Previews for file managers
+
+`src/app/preview.{hpp,cpp}` · `renderPreview` in `src/app/main.cpp` · [docs/previews.md](docs/previews.md)
+
+`termesh --preview file` is `--print` reshaped for one caller: a file
+manager, which runs it every time the cursor lands on a model and shows
+whatever comes out in a pane. Three things follow from that.
+
+**It cannot ask the terminal anything.** The normal start-up sends the
+terminal a few queries and reads the replies to learn what it supports. A
+previewer's standard output is a pipe into the file manager and its standard
+input is not the keyboard, so a query would wait for an answer that never
+comes. Preview mode never probes: it draws half-blocks (text that survives
+being captured and re-laid-out by another program) at a size given by
+`--cols` and `--rows`, unless told otherwise.
+
+**It has to be instant the second time.** Moving through a directory asks
+for the same preview again and again. The finished text is stored in a cache
+directory under a key made of everything that could change it: the file's
+absolute path, size and modification time, and the options that affect the
+picture. A hit is one file read - no model is loaded at all. Entries are
+written to a temporary name and renamed into place, so two previews racing
+for the same file cannot leave half of one behind, and the cache is trimmed
+to a fixed number of entries, oldest first.
+
+**It must never hang on something enormous.** A file over the size limit
+is described in a line of text rather than loaded.
+
+## 27. libtermesh: the C API
+
+`include/termesh.h` · `src/capi/capi.cpp` · `examples/c/render.c` · [docs/library.md](docs/library.md)
+
+Everything above is also available to other programs as a library. Its
+interface is C rather than C++ for the usual reasons: C has a stable binary
+interface on every platform, and every language can call it.
+
+```
+termesh_scene      what to draw    objects, lights, environment, animation state
+termesh_renderer   how to draw     a thread pool and the renderer's scratch memory
+termesh_camera     from where      position, target, field of view  (a plain struct)
+termesh_settings   in what style   shading, shadows, effects        (a plain struct)
+```
+
+`termesh_render_pixels` fills a buffer with RGBA; `termesh_render_text`
+returns what one of the [output backends](#9-terminal-output) would send to a
+terminal. The implementation is a few hundred lines because it does nothing
+but translate: each function checks its arguments, calls the C++ class that
+does the work, and translates the result back.
+
+What makes the interface *stable* is a short list of rules:
+
+- **Opaque handles.** Clients hold `termesh_scene*` and never see inside, so
+  the classes behind it can change freely.
+- **No exceptions cross the boundary.** Every function body runs inside
+  `guard()`, which catches anything thrown, stores the message per thread
+  for `termesh_last_error()`, and returns the function's failure value
+  (`NULL` or a negative number).
+- **Structs carry their size.** A caller-filled struct begins with
+  `struct_size`, set by its `_init` function. The library copies only that
+  many bytes over a default-initialised struct of its own, so a program
+  compiled against an older, shorter struct keeps working when fields are
+  appended - and a struct that was never initialised is refused instead of
+  being read as garbage.
+- **Memory is freed by whoever allocated it.** Text comes back from the
+  library's allocator and goes back through `termesh_free`; a program and
+  a library can be using different heaps (on Windows they often are).
+- **Only the API is exported.** Everything is compiled with hidden
+  visibility; `TERMESH_API` marks the few dozen functions that are the
+  library's entire surface.
+
+The build compiles the engine once into object files and links them three
+ways - into the `termesh` program, the tests, and `libtermesh` - so the
+library is one self-contained file. It installs with a `termesh.pc` for
+pkg-config and a CMake package (`find_package(termesh)` gives the target
+`termesh::termesh`). The C API has its own test program, which links only
+the library and includes only `termesh.h`: it tests what clients get.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle

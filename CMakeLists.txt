@@ -1,19 +1,27 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(termesh
-    VERSION 0.1.1
+    VERSION 0.2.0
     DESCRIPTION "3D model viewer for the terminal with a from-scratch software rasterizer"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 option(TERMESH_BUILD_TESTS "Build the unit tests" ON)
 option(TERMESH_NATIVE "Optimise for the build machine's CPU (-march=native)" OFF)
 option(TERMESH_STATIC "Link the C/C++ runtime statically (for release binaries)" OFF)
+option(TERMESH_BUILD_LIBRARY "Build libtermesh, the renderer as a library with a C API" ON)
+option(TERMESH_LIBRARY_STATIC "Build libtermesh as a static library rather than a shared one" OFF)
 option(TERMESH_ASSIMP "Read more formats (FBX, COLLADA, 3DS, ...) through the Assimp library" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# The same objects go into the program, the tests and the shared library, so
+# they are all built position-independent - and with nothing exported: the
+# library's public symbols are the ones termesh.h marks.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -37,8 +45,10 @@ else()
 endif()
 
 # ---------------------------------------------------------------- library ---
-# Everything except main() lives in a static library so the tests can link it.
-add_library(termesh_third_party STATIC third_party/impl.cpp)
+# Everything except main() is compiled once, into object libraries, and then
+# linked into each of the things built from it: the program, the tests and
+# libtermesh.
+add_library(termesh_third_party OBJECT third_party/impl.cpp)
 target_include_directories(termesh_third_party SYSTEM PUBLIC third_party)
 if(MSVC)
     target_compile_options(termesh_third_party PRIVATE /w)
@@ -53,7 +63,7 @@ else()
     set(TERMESH_TERMINAL_SOURCE src/input/terminal_posix.cpp)
 endif()
 
-add_library(termesh_core STATIC
+add_library(termesh_core OBJECT
     src/accel/bvh.cpp
     src/accel/model_accel.cpp
     src/accel/simplify.cpp
@@ -94,7 +104,7 @@ add_library(termesh_core STATIC
 )
 target_include_directories(termesh_core PUBLIC src)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)
-target_link_libraries(termesh_core PUBLIC Threads::Threads termesh_third_party PRIVATE termesh_warnings)
+target_link_libraries(termesh_core PUBLIC Threads::Threads PRIVATE termesh_warnings)
 target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSION}")
 
 # The optional Assimp backend. Everything termesh needs is in the tree; this
@@ -112,12 +122,101 @@ endif()
 
 # ------------------------------------------------------------- executable ---
 add_executable(termesh src/app/main.cpp)
-target_link_libraries(termesh PRIVATE termesh_core termesh_warnings)
+target_link_libraries(termesh PRIVATE termesh_core termesh_third_party termesh_warnings)
 if(TERMESH_STATIC AND NOT MSVC AND NOT APPLE)
     target_link_options(termesh PRIVATE -static)
 endif()
 
-install(TARGETS termesh RUNTIME DESTINATION bin)
+include(GNUInstallDirs)
+install(TARGETS termesh RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# ---------------------------------------------------------------- library ---
+# libtermesh: the renderer for other programs to use, through the C API in
+# include/termesh.h. Shared by default; either way it is one self-contained
+# file with no dependencies beyond the C++ runtime.
+if(TERMESH_BUILD_LIBRARY)
+    if(TERMESH_LIBRARY_STATIC)
+        set(TERMESH_LIBRARY_TYPE STATIC)
+    else()
+        set(TERMESH_LIBRARY_TYPE SHARED)
+    endif()
+    add_library(termesh_lib ${TERMESH_LIBRARY_TYPE}
+        src/capi/capi.cpp
+        $<TARGET_OBJECTS:termesh_core>
+        $<TARGET_OBJECTS:termesh_third_party>)
+    add_library(termesh::termesh ALIAS termesh_lib)
+    target_include_directories(termesh_lib
+        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        PRIVATE src)
+    target_include_directories(termesh_lib SYSTEM PRIVATE third_party)
+    target_compile_definitions(termesh_lib PRIVATE
+        TERMESH_BUILDING $<TARGET_PROPERTY:termesh_core,INTERFACE_COMPILE_DEFINITIONS>)
+    target_link_libraries(termesh_lib PRIVATE Threads::Threads $<BUILD_INTERFACE:termesh_warnings>)
+    if(TERMESH_ASSIMP)
+        target_link_libraries(termesh_lib PRIVATE assimp::assimp)
+    endif()
+    if(NOT TERMESH_LIBRARY_STATIC)
+        target_compile_definitions(termesh_lib PUBLIC TERMESH_SHARED)
+    endif()
+    # The file is libtermesh.so / libtermesh.dylib / libtermesh.a on Unix. On
+    # Windows a library called "termesh" would collide with the program's
+    # own files, so there it keeps the prefix: libtermesh.dll.
+    set_target_properties(termesh_lib PROPERTIES
+        EXPORT_NAME termesh
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1)
+    if(WIN32)
+        set_target_properties(termesh_lib PROPERTIES OUTPUT_NAME libtermesh PREFIX "")
+        set(TERMESH_PC_LIBNAME libtermesh)
+    else()
+        set_target_properties(termesh_lib PROPERTIES OUTPUT_NAME termesh)
+        set(TERMESH_PC_LIBNAME termesh)
+    endif()
+
+    # The example doubles as a check that the header really is C.
+    add_executable(termesh_c_example examples/c/render.c)
+    # (Compiled as C, but linked by the C++ compiler, so that whatever the
+    # library was built with - a sanitizer's runtime, say - comes along.)
+    set_target_properties(termesh_c_example PROPERTIES
+        C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
+    target_link_libraries(termesh_c_example PRIVATE termesh_lib)
+    if(NOT MSVC)
+        target_compile_options(termesh_c_example PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    # Install: the library, its header, and the files that let CMake
+    # (find_package(termesh)) and pkg-config (termesh.pc) find them.
+    include(CMakePackageConfigHelpers)
+    install(TARGETS termesh_lib EXPORT termeshTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(FILES include/termesh.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT termeshTargets NAMESPACE termesh:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/termesh)
+    configure_package_config_file(cmake/termeshConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/termeshConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/termesh)
+    write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/termeshConfigVersion.cmake
+        VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/termeshConfig.cmake ${CMAKE_CURRENT_BINARY_DIR}/termeshConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/termesh)
+    if(TERMESH_LIBRARY_STATIC)
+        set(TERMESH_PC_CFLAGS "")
+        # What a C program has to add when linking the static library: the
+        # C++ runtime it was written against.
+        if(APPLE)
+            set(TERMESH_PC_LIBS_PRIVATE "-lc++ ${CMAKE_THREAD_LIBS_INIT}")
+        else()
+            set(TERMESH_PC_LIBS_PRIVATE "-lstdc++ -lm ${CMAKE_THREAD_LIBS_INIT}")
+        endif()
+    else()
+        set(TERMESH_PC_CFLAGS "-DTERMESH_SHARED")
+        set(TERMESH_PC_LIBS_PRIVATE "")
+    endif()
+    file(RELATIVE_PATH TERMESH_PC_PREFIX "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
+    string(REGEX REPLACE "/$" "" TERMESH_PC_PREFIX "${TERMESH_PC_PREFIX}")
+    configure_file(cmake/termesh.pc.in ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/termesh.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()
 
 # ------------------------------------------------------------------ tests ---
 if(TERMESH_BUILD_TESTS)
@@ -140,7 +239,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_scene.cpp
         tests/test_stage.cpp
     )
-    target_link_libraries(termesh_tests PRIVATE termesh_core termesh_warnings)
+    target_link_libraries(termesh_tests PRIVATE termesh_core termesh_third_party termesh_warnings)
     # So the tests can find the example scenes.
     target_compile_definitions(termesh_tests PRIVATE TERMESH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     # doctest includes <ciso646> under Clang, which newer libstdc++ flags with
@@ -149,4 +248,22 @@ if(TERMESH_BUILD_TESTS)
         target_compile_options(termesh_tests PRIVATE -Wno-\#warnings)
     endif()
     add_test(NAME termesh_tests COMMAND termesh_tests)
+
+    # The C API is tested from outside, through the library as built.
+    if(TERMESH_BUILD_LIBRARY)
+        add_executable(termesh_capi_tests tests/test_main.cpp tests/test_capi.cpp)
+        target_link_libraries(termesh_capi_tests PRIVATE termesh_lib termesh_warnings)
+        target_include_directories(termesh_capi_tests SYSTEM PRIVATE third_party)
+        target_compile_definitions(termesh_capi_tests PRIVATE TERMESH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(termesh_capi_tests PRIVATE -Wno-\#warnings)
+        endif()
+        add_test(NAME termesh_capi_tests COMMAND termesh_capi_tests)
+        add_test(NAME termesh_c_example COMMAND termesh_c_example)
+        if(WIN32 AND NOT TERMESH_LIBRARY_STATIC)
+            # No rpath on Windows: put the DLL beside the programs that use it.
+            set_target_properties(termesh_lib termesh_capi_tests termesh_c_example PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        endif()
+    endif()
 endif()

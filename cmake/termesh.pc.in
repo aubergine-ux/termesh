@@ -1,0 +1,12 @@
+# Found relative to this file, so the installation can be moved.
+prefix=${pcfiledir}/@TERMESH_PC_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: termesh
+Description: Software-rasterised 3D rendering to pixels and terminal text
+URL: https://github.com/aubergine-ux/termesh
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir} @TERMESH_PC_CFLAGS@
+Libs: -L${libdir} -l@TERMESH_PC_LIBNAME@
+Libs.private: @TERMESH_PC_LIBS_PRIVATE@

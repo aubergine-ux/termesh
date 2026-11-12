@@ -55,6 +55,7 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 | 🎬 | **Scenes**: several models with their own transforms, lights and a camera, described in a small [JSON scene file](docs/scenes.md); camera paths for turntables and flythroughs; a scene inspector sidebar. |
 | 📦 | **Formats**: OBJ (+ MTL), glTF 2.0 (`.gltf` / `.glb`), STL and PLY, all read by loaders written here; point clouds drawn as splats; FBX, COLLADA and dozens more through an optional Assimp backend. |
 | 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
+| 🧩 | **Fits in**: a `--preview` mode for [yazi, lf and ranger](docs/previews.md), and the whole renderer as a library, [libtermesh](docs/library.md), with a stable C API. |
 | 🪶 | **Small and portable**: Linux, macOS and Windows Terminal. Three vendored single-header dependencies, one static binary. |
 | 📖 | **Meant to be read**: a few thousand lines of commented C++, with a guided tour in [ARCHITECTURE.md](ARCHITECTURE.md). |
 
@@ -338,6 +339,9 @@ ctest --test-dir build --output-on-failure
 | `TERMESH_BUILD_TESTS`    | `ON`    | build the doctest unit tests                        |
 | `TERMESH_NATIVE`         | `OFF`   | compile with `-march=native`                        |
 | `TERMESH_STATIC`         | `OFF`   | link the C++ runtime statically (release binaries)  |
+| `TERMESH_BUILD_LIBRARY`  | `ON`    | build libtermesh, the renderer as a C library       |
+| `TERMESH_LIBRARY_STATIC` | `OFF`   | make libtermesh a static library instead of shared  |
+| `TERMESH_ASSIMP`         | `OFF`   | read FBX, COLLADA and more through Assimp           |
 
 The tests cover the maths library, clipping, the rasterizer's fill rule and perspective correction, texture
 sampling, both loaders, every output backend, the GIF encoder and the input parser. CI runs them on Linux
