@@ -89,7 +89,7 @@ Model makeSphere() {
     model.name = "sphere";
     Mesh mesh;
     mesh.hasUVs = true;
-    const int slices = 96, stacks = 48;
+    const int slices = 48, stacks = 24;
     for (int j = 0; j <= stacks; ++j) {
         const float v = static_cast<float>(j) / stacks;
         const float phi = v * kPi;  // 0 at the north pole
@@ -131,7 +131,7 @@ Model makeKnot() {
     Mesh mesh;
     mesh.hasUVs = true;
 
-    const int segments = 512, sides = 48;
+    const int segments = 192, sides = 20;
     const float tubeRadius = 0.42f;
     auto curve = [](float t) {
         const float r = 2.0f + std::cos(3.0f * t);

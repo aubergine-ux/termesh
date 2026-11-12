@@ -30,8 +30,7 @@ int runPng(const Options& options, const Model& model, ThreadPool& pool) {
     target.supersampling = options.supersampling > 0 ? options.supersampling : 2;
     target.blocks = options.blocks;
 
-    RenderSettings settings = makeRenderSettings(options);
-    settings.wireWidth = 1.5f;
+    const RenderSettings settings = makeRenderSettings(options);
     const Image image = renderOffscreen(renderer, pool, model, makeCamera(options, model), settings, target);
     if (!writePng(options.pngPath, image)) {
         std::fprintf(stderr, "termesh: could not write '%s'\n", options.pngPath.c_str());
@@ -50,8 +49,7 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
     target.supersampling = options.supersampling > 0 ? options.supersampling : 3;
     target.blocks = options.blocks;
 
-    RenderSettings settings = makeRenderSettings(options);
-    settings.wireWidth = 1.5f;
+    const RenderSettings settings = makeRenderSettings(options);
     OrbitCamera camera = makeCamera(options, model);
     const float startYaw = camera.yaw;
     // Spin the same way as the interactive viewer; a negative speed reverses.

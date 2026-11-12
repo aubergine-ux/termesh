@@ -145,8 +145,7 @@ void Viewer::drawFrame() {
     RenderSettings settings = settings_;
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
     // Lines need to survive the supersampling resolve, so scale them with it.
-    const bool pixels = backend_->kind() == BackendKind::Kitty || backend_->kind() == BackendKind::Sixel;
-    settings.wireWidth = (pixels ? 1.5f : 1.0f) * static_cast<float>(supersampling_);
+    settings.wireWidth = static_cast<float>(supersampling_);
     settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
 
     const float aspect = static_cast<float>(imageWidth_) * backend_->pixelAspect() / static_cast<float>(imageHeight_);
@@ -184,21 +183,34 @@ void Viewer::drawStatusBar(std::string& out) {
     if (!showStats_) return;
     const int cols = termSize_.cols;
 
+    // Three levels of detail; use the longest one that fits the window.
     std::string text;
     if (!message_.empty()) {
         text = " " + message_;
     } else {
-        char buf[512];
-        const double renderMs = stats_.vertexMs + stats_.setupMs + stats_.rasterMs;
-        std::snprintf(buf, sizeof(buf), " %s | %s tris | %s%s%s%s | %s %dx%d%s | %3.0f fps  render %.1f ms  present %.1f ms",
-                      model_.name.c_str(), formatCount(model_.triangleCount()).c_str(),
-                      shadingModeName(settings_.shading),
-                      (settings_.wireframe || backend_->wantsWireframe()) ? " wire" : "",
-                      settings_.textures ? "" : " notex", autoRotate_ ? "" : " paused",
-                      backendName(backend_->kind()), imageWidth_, imageHeight_,
-                      supersampling_ > 1 ? (" ssaa" + std::to_string(supersampling_)).c_str() : "", fps_, renderMs,
-                      presentMs_);
-        text = buf;
+        const std::string shading = std::string(shadingModeName(settings_.shading)) +
+                                    ((settings_.wireframe || backend_->wantsWireframe()) ? " wire" : "") +
+                                    (settings_.textures ? "" : " notex") + (autoRotate_ ? "" : " paused");
+        const std::string target = std::string(backendName(backend_->kind())) + " " + std::to_string(imageWidth_) +
+                                   "x" + std::to_string(imageHeight_);
+        char fps[32], timing[96];
+        std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
+        std::snprintf(timing, sizeof(timing), "render %.1f ms, present %.1f ms",
+                      stats_.vertexMs + stats_.setupMs + stats_.rasterMs, presentMs_);
+
+        const std::string name = " " + model_.name;
+        const std::string tris = formatCount(model_.triangleCount()) + " tris";
+        const std::string candidates[] = {
+            name + " | " + tris + " | " + shading + " | " + target +
+                (supersampling_ > 1 ? " ssaa" + std::to_string(supersampling_) : "") + " | " + fps + " | " + timing,
+            name + " | " + tris + " | " + shading + " | " + target + " | " + fps,
+            name + " | " + shading + " | " + fps,
+            std::string(" ") + fps,
+        };
+        for (const std::string& candidate : candidates) {
+            text = candidate;
+            if (static_cast<int>(text.size()) + 1 <= cols) break;
+        }
     }
 
     // Right-align a hint if there is room, then pad or cut to the width.
@@ -243,7 +255,6 @@ void Viewer::saveScreenshot() {
 
     RenderSettings settings = settings_;
     settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
-    settings.wireWidth = 1.5f;
     const Image image = renderOffscreen(renderer_, pool_, model_, camera_, settings, target);
 
     // termesh-<model>-01.png, -02.png, ... - never overwrite.
