@@ -51,8 +51,10 @@ add_library(termesh_core STATIC
     src/core/thread_pool.cpp
     src/output/halfblock.cpp
     src/pipeline/clip.cpp
-    src/raster/rasterizer.cpp
+    src/pipeline/renderer.cpp
+    src/pipeline/resolve.cpp
     src/scene/model.cpp
+    src/scene/primitives.cpp
 )
 target_include_directories(termesh_core PUBLIC src)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)

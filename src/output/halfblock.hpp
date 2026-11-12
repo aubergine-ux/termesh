@@ -3,7 +3,7 @@
 
 #include <string>
 
-#include "core/framebuffer.hpp"
+#include "core/image.hpp"
 
 namespace termesh {
 
@@ -12,6 +12,6 @@ namespace termesh {
 // its background the bottom half, so every cell shows two vertically stacked
 // pixels - and since cells are about twice as tall as they are wide, those
 // pixels come out roughly square.
-std::string encodeHalfBlocks(const Framebuffer& fb);
+std::string encodeHalfBlocks(ImageView fb);
 
 }  // namespace termesh

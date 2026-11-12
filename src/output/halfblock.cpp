@@ -16,16 +16,16 @@ void appendColor(std::string& out, const char* prefix, Color8 c) {
 
 }  // namespace
 
-std::string encodeHalfBlocks(const Framebuffer& fb) {
+std::string encodeHalfBlocks(ImageView fb) {
     std::string out;
-    out.reserve(static_cast<std::size_t>(fb.width()) * fb.height() * 12);
+    out.reserve(static_cast<std::size_t>(fb.width) * fb.height * 12);
 
-    for (int y = 0; y + 1 < fb.height(); y += 2) {
-        const Color8* top = fb.colorRow(y);
-        const Color8* bottom = fb.colorRow(y + 1);
+    for (int y = 0; y + 1 < fb.height; y += 2) {
+        const Color8* top = fb.row(y);
+        const Color8* bottom = fb.row(y + 1);
         Color8 fg{}, bg{};
         bool haveColors = false;
-        for (int x = 0; x < fb.width(); ++x) {
+        for (int x = 0; x < fb.width; ++x) {
             // Only emit colour codes when they change from the previous cell.
             if (!haveColors || !(top[x] == fg)) appendColor(out, "\x1b[38;2;", top[x]);
             if (!haveColors || !(bottom[x] == bg)) appendColor(out, "\x1b[48;2;", bottom[x]);
