@@ -68,8 +68,9 @@ namespace termesh {
 
 struct Terminal::State {};
 
+// There is no mode to remember here, but the class keeps its shape.
 Terminal::Terminal() : state_(nullptr) {}
-Terminal::~Terminal() = default;
+Terminal::~Terminal() { delete state_; }
 
 bool Terminal::inputIsTerminal() { return termesh_js_has_terminal() != 0; }
 bool Terminal::outputIsTerminal() { return termesh_js_has_terminal() != 0; }

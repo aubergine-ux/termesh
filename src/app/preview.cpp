@@ -60,7 +60,9 @@ std::string previewCacheKey(const std::string& path, const std::string& paramete
     identity << TERMESH_VERSION << '\n'
              << absolute.string() << '\n'
              << size << '\n'
-             << modified.time_since_epoch().count() << '\n'
+             // (Some standard libraries count file times in a type wider
+             // than any that streams know how to print.)
+             << static_cast<long long>(modified.time_since_epoch().count()) << '\n'
              << parameters;
     return hashName(identity.str());
 }
