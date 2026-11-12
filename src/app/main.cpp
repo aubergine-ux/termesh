@@ -11,6 +11,7 @@
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
 #include "app/preview.hpp"
+#include "app/setup.hpp"
 #include "app/viewer.hpp"
 #include "export/gif.hpp"
 #include "export/offscreen.hpp"
@@ -266,15 +267,17 @@ PreviewTarget previewTarget(const Options& options) {
         // Everything that changes the picture. (The model itself is covered
         // by its size and modification time.)
         char parameters[256];
-        std::snprintf(parameters, sizeof(parameters), "%d %d %d %d|%d %d %d %d %d %d %d|%g %g %g %g %g|%s|%s|%d %g %d %d %d",
-                      static_cast<int>(target.backend), static_cast<int>(target.color), target.cols, target.rows,
-                      static_cast<int>(options.shading), options.wireframe, options.textures, options.normalMaps,
-                      options.cullBackfaces, options.points, options.supersampling,
-                      static_cast<double>(options.yaw.value_or(-1000.0f)), static_cast<double>(options.pitch.value_or(-1000.0f)),
-                      static_cast<double>(options.zoom), static_cast<double>(options.fov),
-                      static_cast<double>(options.cameraTime), options.environment.c_str(), options.animation.c_str(),
-                      options.shadows, static_cast<double>(options.exposure), static_cast<int>(options.toneMapper),
-                      static_cast<int>(options.dither), options.background.r << 16 | options.background.g << 8 | options.background.b);
+        std::snprintf(
+            parameters, sizeof(parameters), "%d %d %d %d|%d %d %d %d %d %d %d|%g %g %g %g %g|%s|%s|%d %g %d %d %d",
+            static_cast<int>(target.backend), static_cast<int>(target.color), target.cols, target.rows,
+            static_cast<int>(options.shading), options.wireframe, options.textures, options.normalMaps,
+            options.cullBackfaces, options.points, options.supersampling,
+            static_cast<double>(options.yaw.value_or(-1000.0f)), static_cast<double>(options.pitch.value_or(-1000.0f)),
+            static_cast<double>(options.zoom), static_cast<double>(options.fov),
+            static_cast<double>(options.cameraTime), options.environment.c_str(), options.animation.c_str(),
+            options.shadows, static_cast<double>(options.exposure), static_cast<int>(options.toneMapper),
+            static_cast<int>(options.dither),
+            options.background.r << 16 | options.background.g << 8 | options.background.b);
         target.cacheKey = previewCacheKey(options.inputs.front(), parameters);
     }
     return target;
@@ -314,7 +317,8 @@ std::string renderPreview(const Options& options, Scene& scene, const PreviewTar
     if (caption) {
         char counts[64];
         const std::size_t triangles = scene.triangleCount();
-        if (triangles >= 1000) std::snprintf(counts, sizeof(counts), "%.1fk triangles", static_cast<double>(triangles) / 1e3);
+        if (triangles >= 1000)
+            std::snprintf(counts, sizeof(counts), "%.1fk triangles", static_cast<double>(triangles) / 1e3);
         else if (triangles > 0) std::snprintf(counts, sizeof(counts), "%zu triangles", triangles);
         else std::snprintf(counts, sizeof(counts), "%zu points", scene.vertexCount());
         std::string text = " " + scene.name + "  " + counts;
@@ -431,91 +435,6 @@ int runBenchmark(const Options& options) {
     return 0;
 }
 
-// Put together the scene the command line asks for: a scene file, a
-// built-in demo, or one or more model files. Returns false (having said
-// why) if that cannot be done. `options` may be replaced: a scene file's
-// render settings become the defaults underneath the command line.
-bool buildScene(int argc, char** argv, Options& options, ThreadPool& pool, Scene& scene) {
-    if (!options.demo.empty()) {
-        Model model = makeDemoModel(options.demo);
-        if (model.meshes.empty()) {
-            std::fprintf(stderr, "termesh: unknown demo '%s'\nTry 'termesh --help'.\n", options.demo.c_str());
-            return false;
-        }
-        scene.name = model.name;
-        scene.add(std::move(model), options.demo, Mat4::identity(), &pool).source = "demo:" + options.demo;
-        return true;
-    }
-
-    if (isSceneFile(options.inputs.front())) {
-        SceneLoadResult loaded = loadSceneFile(options.inputs.front(), &pool);
-        for (const std::string& warning : loaded.warnings)
-            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
-        if (!loaded.ok) {
-            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
-            return false;
-        }
-        scene = std::move(loaded.scene);
-
-        // The file's "render" settings sit between the built-in defaults and
-        // the command line: read the command line again on top of them.
-        Options defaults;
-        if (std::string error; !applySceneRenderSettings(scene.renderSettings, defaults, error)) {
-            std::fprintf(stderr, "termesh: '%s': %s\n", options.inputs.front().c_str(), error.c_str());
-            return false;
-        }
-        options = parseOptions(argc, argv, defaults).options;
-        return true;
-    }
-
-    for (const std::string& path : options.inputs) {
-        LoadResult loaded = loadModel(path);
-        for (const std::string& warning : loaded.warnings)
-            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
-        if (!loaded.ok) {
-            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
-            return false;
-        }
-        const std::string name = loaded.model.name;
-        scene.add(std::move(loaded.model), name, Mat4::identity(), &pool).source = path;
-    }
-    scene.name = scene.objects.front()->name;
-    if (scene.objects.size() > 1) {
-        // Models from different files were not made to share a space.
-        scene.name += " +" + std::to_string(scene.objects.size() - 1);
-        scene.arrangeInRow();
-    }
-    return true;
-}
-
-// Apply the animation options to every animated model in the scene.
-bool setUpAnimations(const Options& options, Scene& scene, ThreadPool& pool) {
-    bool matched = false;
-    for (const auto& object : scene.objects) {
-        if (!object->player) continue;
-        AnimationPlayer& player = *object->player;
-        if (!options.animation.empty()) {
-            const int clip = findAnimation(object->model, options.animation);
-            if (clip >= 0) {
-                player.setClip(clip);
-                matched = true;
-            }
-        }
-        if (options.animationSpeedSet) player.setSpeed(options.animationSpeed);
-        if (options.animationTimeSet) player.seek(options.animationTime);
-        if (options.animationPaused) player.pause();
-    }
-    scene.pose(&pool);
-    if (options.animation.empty() || matched) return true;
-    if (scene.animated()) {
-        std::fprintf(stderr, "termesh: no animation '%s' in %s (try --list-animations)\n", options.animation.c_str(),
-                     scene.name.c_str());
-        return false;
-    }
-    std::fprintf(stderr, "termesh: warning: %s has no animations; --animation ignored\n", scene.name.c_str());
-    return true;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -557,7 +476,8 @@ int main(int argc, char** argv) {
             const std::uint64_t megabytes = fileSize(options.inputs.front()) >> 20;
             if (megabytes > static_cast<std::uint64_t>(options.previewMaxMb)) {
                 std::printf("%s\n%llu MB: too large to preview (limit %d MB; see --preview-max-mb)\n",
-                            options.inputs.front().c_str(), static_cast<unsigned long long>(megabytes), options.previewMaxMb);
+                            options.inputs.front().c_str(), static_cast<unsigned long long>(megabytes),
+                            options.previewMaxMb);
                 return 0;
             }
         }

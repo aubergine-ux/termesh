@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>termesh playground</title>
+<meta name="description" content="A software-rasterised 3D model viewer for the terminal, running in your browser. Drop a model on the page.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>termesh <span>playground</span></h1>
+  <p>
+    A 3D renderer written from scratch, drawing with text. This is the real program, compiled to
+    WebAssembly and running in a terminal emulator in your browser. No GPU is involved.
+  </p>
+</header>
+
+<main>
+  <div class="toolbar" role="toolbar" aria-label="Models and display">
+    <div class="group" id="models">
+      <button type="button" data-args="--demo knot" class="active">Knot</button>
+      <button type="button" data-args="--demo tentacle">Tentacle</button>
+      <button type="button" data-args="--demo sphere -s pbr --env sky">Sphere</button>
+      <button type="button" data-args="/examples/showroom.json">Showroom</button>
+      <button type="button" data-args="/examples/flythrough.json">Flythrough</button>
+      <button type="button" id="open">Open a file…</button>
+      <input type="file" id="file" multiple hidden>
+    </div>
+    <div class="group">
+      <label for="backend">Draw with</label>
+      <select id="backend">
+        <option value="halfblock">half blocks</option>
+        <option value="braille">Braille</option>
+        <option value="ascii">ASCII</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="stage">
+    <div id="terminal" aria-label="Terminal running termesh"></div>
+    <div id="drop" hidden><div>Drop to view</div></div>
+    <div id="overlay" hidden>
+      <p id="overlay-text"></p>
+      <button type="button" id="restart">Start again</button>
+    </div>
+  </div>
+  <p id="status" role="status">Loading…</p>
+
+  <section class="help">
+    <div>
+      <h2>Your own model</h2>
+      <p>
+        Drop a file anywhere on the page: <code>.glb</code>, <code>.gltf</code>, <code>.obj</code>,
+        <code>.stl</code> or <code>.ply</code>. For a model in several files (a <code>.gltf</code> with its
+        <code>.bin</code> and textures, an <code>.obj</code> with its <code>.mtl</code>) drop them all together.
+        Nothing is uploaded: the file is read by this page and goes no further.
+      </p>
+    </div>
+    <div>
+      <h2>Controls</h2>
+      <p>Click the terminal first, so it has the keyboard.</p>
+      <dl>
+        <dt>drag</dt><dd>orbit</dd>
+        <dt>scroll</dt><dd>zoom</dd>
+        <dt><kbd>s</kbd></dt><dd>next shading mode</dd>
+        <dt><kbd>b</kbd></dt><dd>next way of drawing</dd>
+        <dt><kbd>w</kbd></dt><dd>wireframe</dd>
+        <dt><kbd>space</kbd></dt><dd>stop / start turning</dd>
+        <dt><kbd>Tab</kbd></dt><dd>scene inspector</dd>
+        <dt><kbd>?</kbd></dt><dd>every key</dd>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <a href="https://github.com/aubergine-ux/termesh">termesh on GitHub</a>
+  <span id="version"></span>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+<script src="termesh-web.js"></script>
+<script src="playground.js"></script>
+</body>
+</html>

@@ -139,6 +139,31 @@ jobs:
       - name: The command comes along
         run: termesh --version
 
+  # WebAssembly: the unit tests and the program run under Node, and the
+  # browser build is driven through a fake terminal.
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Configure
+        run: emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-wasm --parallel
+      - name: Unit tests
+        run: ctest --test-dir build-wasm --output-on-failure
+      - name: Run the program under Node
+        run: |
+          node build-wasm/termesh.js --version
+          node build-wasm/termesh.js --demo knot --png knot.png --size 320x240
+          node build-wasm/termesh.js --demo tentacle --gif tentacle.gif --size 120x90 --frames 6
+          node build-wasm/termesh.js examples/showroom.json --print --backend ascii --color none --cols 60 --rows 20
+          node build-wasm/termesh.js --demo knot --bench 20
+          test -s knot.png && test -s tentacle.gif
+      - name: Drive the browser build
+        run: node web/test/smoke.cjs build-wasm/termesh-web.js
+
   # The optional backend: FBX, COLLADA and the rest through Assimp.
   assimp:
     name: Linux (Assimp backend)

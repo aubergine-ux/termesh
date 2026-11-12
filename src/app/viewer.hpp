@@ -32,6 +32,17 @@ public:
     // Runs until the user quits. Returns the process exit code.
     int run();
 
+    // run() in three parts, for hosts that own the main loop themselves
+    // (a browser calls step() once per animation frame):
+    //
+    //   begin()  take over the terminal; false if there is none to take
+    //   step()   handle input that has arrived and draw a frame if one is
+    //            due; false once the user has quit
+    //   end()    give the terminal back
+    bool begin();
+    bool step();
+    void end();
+
 private:
     using Clock = std::chrono::steady_clock;
 
@@ -102,6 +113,12 @@ private:
     // Levels of detail for a large static model are built off to the side
     // so the first frame does not wait for them.
     std::future<std::vector<std::vector<std::vector<MeshLod>>>> pendingLods_;  // per object, per mesh
+
+    // State of the main loop between steps.
+    Clock::duration frameInterval_{};
+    std::string inputBytes_;
+    std::vector<InputEvent> inputEvents_;
+    bool begun_ = false;
 
     OrbitCamera camera_;
     // While the scene's camera path is being followed, the view comes from

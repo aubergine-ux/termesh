@@ -105,6 +105,10 @@ Viewer::Viewer(const Options& options, Scene& scene, ThreadPool& pool)
         // from the rest pose now. The rest are built off to the side.
         for (const auto& object : scene_.objects)
             if (object->player) object->accel.buildLods(object->model, &pool_);
+#ifdef __EMSCRIPTEN__
+        // No second thread to build them on.
+        scene_.buildLods(&pool_);
+#else
         pendingLods_ = std::async(std::launch::async, [this] {
             std::vector<std::vector<std::vector<MeshLod>>> lods(scene_.objects.size());
             for (std::size_t i = 0; i < scene_.objects.size(); ++i) {
@@ -113,6 +117,7 @@ Viewer::Viewer(const Options& options, Scene& scene, ThreadPool& pool)
             }
             return lods;
         });
+#endif
     }
     lightYaw_ = radians(options.lightAngle);
     dither_ = options.dither;
@@ -906,15 +911,27 @@ void Viewer::handleMouse(const MouseEvent& mouse) {
 // --------------------------------------------------------------- main loop ---
 
 int Viewer::run() {
+    if (!begin()) return 1;
+    while (step()) {
+    }
+    end();
+    return 0;
+}
+
+bool Viewer::begin() {
     if (!terminal_.enterRawMode()) {
         std::fprintf(stderr,
                      "termesh: not running in an interactive terminal.\n"
                      "Use --print, --png or --gif to render without one.\n");
-        return 1;
+        return false;
     }
 
     caps_ = capsFromEnvironment();
+#ifndef __EMSCRIPTEN__
+    // (Asking means waiting for the answers, which a browser's event loop
+    // does not allow; there the page says what its terminal can do.)
     probeTerminal(terminal_, parser_, caps_);
+#endif
     if (options_.color) caps_.color = *options_.color;
     termSize_ = terminal_.size();
     resolveCellSize(termSize_, caps_);
@@ -933,83 +950,90 @@ int Viewer::run() {
     rebuildBackend();
 
     lastFrameTime_ = fpsWindowStart_ = Clock::now();
-    const auto frameInterval = std::chrono::duration_cast<Clock::duration>(
+    frameInterval_ = std::chrono::duration_cast<Clock::duration>(
         std::chrono::duration<double>(1.0 / std::max(options_.fpsLimit, 1)));
-    std::string bytes;
-    std::vector<InputEvent> events;
+    begun_ = true;
+    return true;
+}
 
-    while (running_ && !Terminal::quitRequested()) {
-        const bool animating = ((autoRotate_ && !dragging_) || followPath_ || scene_.playing()) && !showHelp_;
+bool Viewer::step() {
+    if (!running_ || Terminal::quitRequested()) return false;
+    std::string& bytes = inputBytes_;
+    std::vector<InputEvent>& events = inputEvents_;
 
-        // "Moving" decides between a quick frame and a full-quality one.
-        // When the motion stops, draw once more at full quality.
-        const bool moving = animating || dragging_;
-        if (moving_ && !moving && appliedQuality_ > 0) dirty_ = true;
-        moving_ = moving;
+    const bool animating = ((autoRotate_ && !dragging_) || followPath_ || scene_.playing()) && !showHelp_;
 
-        // Levels of detail built in the background arrive here.
-        if (pendingLods_.valid() && pendingLods_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            std::vector<std::vector<std::vector<MeshLod>>> lods = pendingLods_.get();
-            for (std::size_t i = 0; i < scene_.objects.size(); ++i)
-                if (!scene_.objects[i]->player) scene_.objects[i]->accel.setLods(std::move(lods[i]));
-            dirty_ = true;
-        }
-        const auto nextFrame = lastFrameTime_ + frameInterval;
+    // "Moving" decides between a quick frame and a full-quality one.
+    // When the motion stops, draw once more at full quality.
+    const bool moving = animating || dragging_;
+    if (moving_ && !moving && appliedQuality_ > 0) dirty_ = true;
+    moving_ = moving;
 
-        // Sleep in read(): until the next frame is due if something is
-        // moving, otherwise until the user does something.
-        int timeoutMs = 250;
-        if (dirty_ || animating) {
-            const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(nextFrame - Clock::now()).count();
-            timeoutMs = static_cast<int>(std::clamp<long long>(wait, 0, 250));
-        }
-        if (parser_.hasPending()) timeoutMs = std::min(timeoutMs, 25);
+    // Levels of detail built in the background arrive here.
+    if (pendingLods_.valid() && pendingLods_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        std::vector<std::vector<std::vector<MeshLod>>> lods = pendingLods_.get();
+        for (std::size_t i = 0; i < scene_.objects.size(); ++i)
+            if (!scene_.objects[i]->player) scene_.objects[i]->accel.setLods(std::move(lods[i]));
+        dirty_ = true;
+    }
+    const auto nextFrame = lastFrameTime_ + frameInterval_;
 
-        bytes.clear();
-        if (!terminal_.read(bytes, timeoutMs)) break;
-        events.clear();
-        if (!bytes.empty()) parser_.feed(bytes, events);
-        else parser_.flush(events);
-        for (const InputEvent& event : events) {
-            handleEvent(event);
-            if (!running_) break;
-        }
-        if (!running_) break;
+    // Sleep in read(): until the next frame is due if something is
+    // moving, otherwise until the user does something.
+    int timeoutMs = 250;
+    if (dirty_ || animating) {
+        const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(nextFrame - Clock::now()).count();
+        timeoutMs = static_cast<int>(std::clamp<long long>(wait, 0, 250));
+    }
+    if (parser_.hasPending()) timeoutMs = std::min(timeoutMs, 25);
 
-        // Window resized?
-        const TerminalSize size = terminal_.size();
-        if (size.cols != termSize_.cols || size.rows != termSize_.rows || size.pixelWidth != termSize_.pixelWidth ||
-            size.pixelHeight != termSize_.pixelHeight) {
-            termSize_ = size;
-            resolveCellSize(termSize_, caps_);
-            helpDrawn_ = false;
-            layout();
-        }
-
-        if (!message_.empty() && Clock::now() >= messageExpiry_) {
-            message_.clear();
-            dirty_ = true;
-        }
-
-        if (showHelp_) {
-            if (!helpDrawn_) {
-                std::string out;
-                drawHelp(out);
-                terminal_.write(out);
-                helpDrawn_ = true;
-            }
-            continue;
-        }
-
-        if ((dirty_ || animating) && Clock::now() >= nextFrame) drawFrame();
+    bytes.clear();
+    if (!terminal_.read(bytes, timeoutMs)) return false;
+    events.clear();
+    if (!bytes.empty()) parser_.feed(bytes, events);
+    else parser_.flush(events);
+    for (const InputEvent& event : events) {
+        handleEvent(event);
+        if (!running_) return false;
     }
 
+    // Window resized?
+    const TerminalSize size = terminal_.size();
+    if (size.cols != termSize_.cols || size.rows != termSize_.rows || size.pixelWidth != termSize_.pixelWidth ||
+        size.pixelHeight != termSize_.pixelHeight) {
+        termSize_ = size;
+        resolveCellSize(termSize_, caps_);
+        helpDrawn_ = false;
+        layout();
+    }
+
+    if (!message_.empty() && Clock::now() >= messageExpiry_) {
+        message_.clear();
+        dirty_ = true;
+    }
+
+    if (showHelp_) {
+        if (!helpDrawn_) {
+            std::string out;
+            drawHelp(out);
+            terminal_.write(out);
+            helpDrawn_ = true;
+        }
+        return true;
+    }
+
+    if ((dirty_ || animating) && Clock::now() >= nextFrame) drawFrame();
+    return true;
+}
+
+void Viewer::end() {
+    if (!begun_) return;
+    begun_ = false;
     std::string out;
     backend_->cleanup(out);
     out += kLeaveScreen;
     terminal_.write(out);
     terminal_.leaveRawMode();
-    return 0;
 }
 
 }  // namespace termesh

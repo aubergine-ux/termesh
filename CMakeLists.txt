@@ -34,6 +34,17 @@ endif()
 
 find_package(Threads REQUIRED)
 
+# WebAssembly (configure with emcmake). Exceptions and SIMD both have to be
+# asked for, when compiling and when linking; the SSE2 code paths compile to
+# WebAssembly's own 128-bit SIMD. There are no threads: a page would need
+# special server headers to be allowed them.
+if(EMSCRIPTEN)
+    add_compile_options(-fwasm-exceptions -msimd128 -msse2)
+    add_link_options(-fwasm-exceptions -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=2097152)
+    set(TERMESH_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(TERMESH_PYTHON OFF CACHE BOOL "" FORCE)
+endif()
+
 # Warnings for our own code. Third-party headers are included as SYSTEM so
 # they stay quiet.
 add_library(termesh_warnings INTERFACE)
@@ -58,7 +69,9 @@ else()
     target_compile_options(termesh_third_party PRIVATE -w)
 endif()
 
-if(WIN32)
+if(EMSCRIPTEN)
+    set(TERMESH_TERMINAL_SOURCE src/input/terminal_wasm.cpp)
+elseif(WIN32)
     set(TERMESH_TERMINAL_SOURCE src/input/terminal_win.cpp)
 else()
     set(TERMESH_TERMINAL_SOURCE src/input/terminal_posix.cpp)
@@ -76,6 +89,7 @@ add_library(termesh_core OBJECT
     src/app/inspector.cpp
     src/app/options.cpp
     src/app/preview.cpp
+    src/app/setup.cpp
     src/app/viewer.cpp
     src/core/json.cpp
     src/core/texture.cpp
@@ -126,6 +140,29 @@ add_executable(termesh src/app/main.cpp)
 target_link_libraries(termesh PRIVATE termesh_core termesh_third_party termesh_warnings)
 if(TERMESH_STATIC AND NOT MSVC AND NOT APPLE)
     target_link_options(termesh PRIVATE -static)
+endif()
+
+# -------------------------------------------------------------------- web ---
+# Two things come out of a WebAssembly build. `termesh` is the ordinary
+# program, run by Node with the real file system (which is how the tests and
+# the command line are exercised in CI). `termesh-web` is the viewer for a
+# web page: no main(), just the entry points in src/web/web_main.cpp, with
+# the example scenes packed inside. web/ holds the page that loads it.
+if(EMSCRIPTEN)
+    target_link_options(termesh PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1)
+
+    add_executable(termesh_web src/web/web_main.cpp)
+    set_target_properties(termesh_web PROPERTIES OUTPUT_NAME termesh-web)
+    target_link_libraries(termesh_web PRIVATE termesh_core termesh_third_party termesh_warnings)
+    target_link_options(termesh_web PRIVATE
+        --no-entry
+        -sMODULARIZE=1
+        -sEXPORT_NAME=createTermesh
+        -sENVIRONMENT=web,node
+        -sEXPORTED_FUNCTIONS=_termesh_web_start,_termesh_web_frame,_termesh_web_stop
+        -sEXPORTED_RUNTIME_METHODS=FS,ccall
+        "SHELL:--embed-file ${CMAKE_CURRENT_SOURCE_DIR}/examples/showroom.json@/examples/showroom.json"
+        "SHELL:--embed-file ${CMAKE_CURRENT_SOURCE_DIR}/examples/flythrough.json@/examples/flythrough.json")
 endif()
 
 include(GNUInstallDirs)
@@ -289,6 +326,9 @@ if(TERMESH_BUILD_TESTS)
     # a #warning in C++20. It is harmless and not ours to fix.
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(termesh_tests PRIVATE -Wno-\#warnings)
+    endif()
+    if(EMSCRIPTEN)
+        target_link_options(termesh_tests PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1)
     endif()
     add_test(NAME termesh_tests COMMAND termesh_tests)
 

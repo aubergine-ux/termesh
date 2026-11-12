@@ -1,0 +1,51 @@
+name: Playground
+
+# Builds the WebAssembly viewer and publishes it, with the page in web/, to
+# GitHub Pages.
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "web/**", "third_party/**", "examples/**", "CMakeLists.txt", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Build
+        run: |
+          emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release -DTERMESH_BUILD_TESTS=OFF
+          cmake --build build-wasm --parallel --target termesh_web
+      - name: Check it
+        run: node web/test/smoke.cjs build-wasm/termesh-web.js
+      - name: Assemble the site
+        run: |
+          mkdir site
+          cp web/index.html web/style.css web/playground.js site/
+          cp build-wasm/termesh-web.js build-wasm/termesh-web.wasm site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

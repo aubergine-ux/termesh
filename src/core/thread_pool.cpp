@@ -6,6 +6,10 @@ namespace termesh {
 
 ThreadPool::ThreadPool(unsigned threads) {
     if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    // WebAssembly without threads: the caller does all the work.
+    threads = 1;
+#endif
     workers_.reserve(threads - 1);
     for (unsigned i = 1; i < threads; ++i) workers_.emplace_back([this] { workerLoop(); });
 }
