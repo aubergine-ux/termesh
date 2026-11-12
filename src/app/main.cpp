@@ -10,6 +10,7 @@
 #include "app/benchmark.hpp"
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
+#include "app/preview.hpp"
 #include "app/viewer.hpp"
 #include "export/gif.hpp"
 #include "export/offscreen.hpp"
@@ -240,6 +241,90 @@ int runPrint(const Options& options, Scene& scene, ThreadPool& pool) {
     return 0;
 }
 
+// --preview: one still for a file manager's preview pane.
+//
+// Everything about it is chosen for an answer that arrives at once and
+// cannot go wrong: the terminal is not asked what it supports (a preview
+// pane's output is a pipe, and a query would wait for a reply that never
+// comes), the default is half-block text that every file manager can show,
+// and the finished output is cached.
+struct PreviewTarget {
+    BackendKind backend;
+    ColorDepth color;
+    int cols, rows;
+    std::string cacheKey;  // empty: do not cache
+};
+
+PreviewTarget previewTarget(const Options& options) {
+    PreviewTarget target;
+    const TerminalCaps caps = capsFromEnvironment();
+    target.color = options.color.value_or(caps.color == ColorDepth::None ? ColorDepth::Indexed256 : caps.color);
+    target.backend = options.backend.value_or(BackendKind::HalfBlock);
+    target.cols = options.cols > 0 ? options.cols : 80;
+    target.rows = options.rows > 0 ? options.rows : 24;
+    if (options.previewCache && options.inputs.size() == 1) {
+        // Everything that changes the picture. (The model itself is covered
+        // by its size and modification time.)
+        char parameters[256];
+        std::snprintf(parameters, sizeof(parameters), "%d %d %d %d|%d %d %d %d %d %d %d|%g %g %g %g %g|%s|%s|%d %g %d %d %d",
+                      static_cast<int>(target.backend), static_cast<int>(target.color), target.cols, target.rows,
+                      static_cast<int>(options.shading), options.wireframe, options.textures, options.normalMaps,
+                      options.cullBackfaces, options.points, options.supersampling,
+                      static_cast<double>(options.yaw.value_or(-1000.0f)), static_cast<double>(options.pitch.value_or(-1000.0f)),
+                      static_cast<double>(options.zoom), static_cast<double>(options.fov),
+                      static_cast<double>(options.cameraTime), options.environment.c_str(), options.animation.c_str(),
+                      options.shadows, static_cast<double>(options.exposure), static_cast<int>(options.toneMapper),
+                      static_cast<int>(options.dither), options.background.r << 16 | options.background.g << 8 | options.background.b);
+        target.cacheKey = previewCacheKey(options.inputs.front(), parameters);
+    }
+    return target;
+}
+
+std::string renderPreview(const Options& options, Scene& scene, const PreviewTarget& target, ThreadPool& pool) {
+    // A caption underneath, if there is room for one.
+    const bool caption = target.rows >= 8;
+    DrawArea area;
+    area.cols = target.cols;
+    area.rows = std::max(target.rows - (caption ? 1 : 0), 1);
+
+    const auto backend = makeBackend(target.backend, target.color);
+    backend->setDither(options.dither);
+    int width = 0, height = 0;
+    backend->configure(area, width, height);
+    int ssaa = options.supersampling > 0 ? options.supersampling : backend->defaultSupersampling();
+    while (ssaa > 1 && static_cast<std::int64_t>(width) * ssaa * height * ssaa > kMaxFramebufferPixels) --ssaa;
+
+    RenderSettings settings = renderSettings(options, scene);
+    settings.wireframe = settings.wireframe || backend->wantsWireframe();
+    settings.wireWidth = static_cast<float>(ssaa);
+    settings.pixelScale = static_cast<float>(ssaa);
+    settings.lodTolerance = prepareLods(options, scene, pool) * static_cast<float>(ssaa);
+
+    Renderer renderer(pool);
+    Framebuffer fb(width * ssaa, height * ssaa);
+    const float aspect = static_cast<float>(width) * backend->pixelAspect() / static_cast<float>(height);
+    const std::vector<DrawItem> items = scene.drawItems();
+    renderer.render(items, View(options, scene).camera(aspect, options.cameraTime, 0.0f), settings, fb);
+    Image image;
+    resolve(fb, ssaa, image, pool);
+    if (settings.post.fxaa) applyFxaa(image, pool);
+
+    std::string out;
+    backend->print(image.view(), out);
+    if (caption) {
+        char counts[64];
+        const std::size_t triangles = scene.triangleCount();
+        if (triangles >= 1000) std::snprintf(counts, sizeof(counts), "%.1fk triangles", static_cast<double>(triangles) / 1e3);
+        else if (triangles > 0) std::snprintf(counts, sizeof(counts), "%zu triangles", triangles);
+        else std::snprintf(counts, sizeof(counts), "%zu points", scene.vertexCount());
+        std::string text = " " + scene.name + "  " + counts;
+        if (scene.animated()) text += "  animated";
+        if (static_cast<int>(text.size()) > target.cols) text.resize(static_cast<std::size_t>(target.cols));
+        out += (target.color == ColorDepth::None ? "" : "\x1b[2m") + text + "\x1b[0m\n";
+    }
+    return out;
+}
+
 // --bench: time the renderer alone, with no terminal in the way.
 int runBench(const Options& options, Scene& scene, ThreadPool& pool) {
     Renderer renderer(pool);
@@ -457,6 +542,27 @@ int main(int argc, char** argv) {
     }
     if (options.benchmark) return runBenchmark(options);
 
+    // Previews: answer from the cache if possible, before loading anything.
+    PreviewTarget preview{};
+    if (options.preview) {
+        preview = previewTarget(options);
+        if (std::string cached; readPreviewCache(previewCacheDirectory(), preview.cacheKey, cached)) {
+            Terminal::prepareOutput();
+            std::fwrite(cached.data(), 1, cached.size(), stdout);
+            return 0;
+        }
+        // A file too big to load in the time a preview has gets a line of
+        // text instead of a long wait.
+        if (!options.inputs.empty()) {
+            const std::uint64_t megabytes = fileSize(options.inputs.front()) >> 20;
+            if (megabytes > static_cast<std::uint64_t>(options.previewMaxMb)) {
+                std::printf("%s\n%llu MB: too large to preview (limit %d MB; see --preview-max-mb)\n",
+                            options.inputs.front().c_str(), static_cast<unsigned long long>(megabytes), options.previewMaxMb);
+                return 0;
+            }
+        }
+    }
+
     ThreadPool pool(static_cast<unsigned>(options.threads));
     Scene scene;
     if (!buildScene(argc, argv, options, pool, scene)) return options.demo.empty() ? 1 : 2;
@@ -485,6 +591,14 @@ int main(int argc, char** argv) {
     }
     if (!setUpAnimations(options, scene, pool)) return 2;
 
+    if (options.preview) {
+        const std::string out = renderPreview(options, scene, preview, pool);
+        writePreviewCache(previewCacheDirectory(), preview.cacheKey, out);
+        Terminal::prepareOutput();
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        std::fflush(stdout);
+        return 0;
+    }
     if (options.benchFrames > 0) return runBench(options, scene, pool);
     // --png and --gif can be combined: one run writes both.
     if (!options.pngPath.empty() || !options.gifPath.empty()) {

@@ -8,6 +8,8 @@
 #include "app/capabilities.hpp"
 #include "app/benchmark.hpp"
 #include "app/options.hpp"
+#include "app/preview.hpp"
+#include "support.hpp"
 #include "export/offscreen.hpp"
 #include "scene/primitives.hpp"
 
@@ -346,4 +348,66 @@ TEST_CASE("options: the benchmark suite needs no model") {
     CHECK(r.options.frames == 8);
     CHECK_FALSE(parse({"--benchmark-scene"}).ok);
     CHECK_FALSE(parse({"--benchmark-json", ""}).ok);
+}
+
+TEST_CASE("preview cache: keyed by the file, its contents and the request") {
+    TempDir dir;
+    const std::string model = dir.write("model.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    const std::string key = previewCacheKey(model, "80x24 halfblock");
+    REQUIRE(key.size() == 16);
+    CHECK(key.find_first_not_of("0123456789abcdef") == std::string::npos);
+
+    // The same request gives the same key; a different one does not.
+    CHECK(previewCacheKey(model, "80x24 halfblock") == key);
+    CHECK(previewCacheKey(model, "60x24 halfblock") != key);
+    CHECK(previewCacheKey(dir.write("other.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"), "80x24 halfblock") != key);
+    // Changing the file changes the key: its old previews are never shown again.
+    dir.write("model.obj", "v 0 0 0\nv 2 0 0\nv 0 2 0\nv 0 0 2\nf 1 2 3\n");
+    CHECK(previewCacheKey(model, "80x24 halfblock") != key);
+    // A file that is not there has no key, and so is never cached.
+    CHECK(previewCacheKey(dir.file("missing.obj"), "80x24").empty());
+
+    CHECK(fileSize(model) == std::string("v 0 0 0\nv 2 0 0\nv 0 2 0\nv 0 0 2\nf 1 2 3\n").size());
+    CHECK(fileSize(dir.file("missing.obj")) == 0);
+}
+
+TEST_CASE("preview cache: storing, fetching and pruning") {
+    TempDir dir;
+    const std::string cache = dir.file("cache/previews");  // does not exist yet
+    std::string out;
+    CHECK_FALSE(readPreviewCache(cache, "0123456789abcdef", out));
+
+    const std::string picture = std::string("\x1b[38;2;1;2;3m") + "\xe2\x96\x80" + std::string(1, '\0') + "\n";  // arbitrary bytes
+    writePreviewCache(cache, "0123456789abcdef", picture);
+    REQUIRE(readPreviewCache(cache, "0123456789abcdef", out));
+    CHECK(out == picture);
+    CHECK_FALSE(readPreviewCache(cache, "fedcba9876543210", out));
+
+    // Nothing to store, nowhere to store it, or no name for it: quietly nothing.
+    writePreviewCache(cache, "aaaaaaaaaaaaaaaa", "");
+    CHECK_FALSE(readPreviewCache(cache, "aaaaaaaaaaaaaaaa", out));
+    writePreviewCache("", "aaaaaaaaaaaaaaaa", "x");
+    writePreviewCache(cache, "", "x");
+    CHECK_FALSE(readPreviewCache("", "aaaaaaaaaaaaaaaa", out));
+    CHECK_FALSE(readPreviewCache(cache, "", out));
+
+    // Past the limit, the cache is cut back rather than left to grow.
+    for (int i = 0; i < 25; ++i) writePreviewCache(cache, "entry" + std::to_string(i), "data", 10);
+    std::size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(cache)) files += entry.is_regular_file();
+    CHECK(files <= 12);
+    CHECK(files >= 3);
+    // The newest entry survives.
+    CHECK(readPreviewCache(cache, "entry24", out));
+}
+
+TEST_CASE("options: preview mode") {
+    const ParseResult r = parse({"model.glb", "--preview", "--cols", "40", "--rows", "12", "--no-cache", "--preview-max-mb", "64"});
+    REQUIRE(r.ok);
+    CHECK(r.options.preview);
+    CHECK_FALSE(r.options.previewCache);
+    CHECK(r.options.previewMaxMb == 64);
+    CHECK(r.options.cols == 40);
+    CHECK(parse({"model.glb", "--preview"}).options.previewCache);
+    CHECK_FALSE(parse({"model.glb", "--preview-max-mb", "0"}).ok);
 }

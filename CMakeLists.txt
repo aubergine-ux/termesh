@@ -64,6 +64,7 @@ add_library(termesh_core STATIC
     src/app/capabilities.cpp
     src/app/inspector.cpp
     src/app/options.cpp
+    src/app/preview.cpp
     src/app/viewer.cpp
     src/core/json.cpp
     src/core/texture.cpp

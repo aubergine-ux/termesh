@@ -83,6 +83,9 @@ struct Options {
     bool listAnimations = false;                               // print the clips in the file and exit
 
     // Non-interactive modes.
+    bool preview = false;       // a quick still for a file manager's preview pane
+    bool previewCache = true;   // remember previews between runs
+    int previewMaxMb = 256;     // files larger than this are described, not drawn
     bool print = false;         // print one frame to the terminal and exit
     std::string pngPath;        // render one frame to a PNG and exit
     std::string gifPath;        // record a turntable animation and exit

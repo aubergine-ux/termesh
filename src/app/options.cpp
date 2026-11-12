@@ -85,6 +85,11 @@ std::string usageText() {
                        "      --list-animations  print the animations in the file and exit\n"
                        "\n"
                        "Export:\n"
+                       "      --preview          a quick still for a file manager's preview pane: no terminal\n"
+                       "                         queries, and remembered between runs (see docs/previews.md)\n"
+                       "      --no-cache         with --preview: render afresh, and do not remember the result\n"
+                       "      --preview-max-mb <n>   with --preview: describe larger files instead of drawing\n"
+                       "                         them (default: 256)\n"
                        "      --print            print a single frame and exit\n"
                        "      --cols <n>, --rows <n>   size of the printed frame in cells\n"
                        "      --png <file>       render the view to a PNG and exit\n"
@@ -412,6 +417,8 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         else if (name == "--list-animations") o.listAnimations = true;
         else if (name == "--no-spin") o.spin = false;
         else if (name == "--print") o.print = true;
+        else if (name == "--preview") o.preview = true;
+        else if (name == "--no-cache") o.previewCache = false;
         else if (name == "--benchmark") o.benchmark = true;
         else if (name == "--benchmark-list") o.benchmarkList = true;
         else if (name == "--demo") {
@@ -463,6 +470,9 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         } else if (name == "--fps") {
             if (!needValue()) return missing();
             if (!intOption(o.fpsLimit, 1, 1000)) return invalid();
+        } else if (name == "--preview-max-mb") {
+            if (!needValue()) return missing();
+            if (!intOption(o.previewMaxMb, 1, 1000000)) return invalid();
         } else if (name == "--point-size") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.pointSize) || o.pointSize <= 0.0f || o.pointSize > 100.0f) return invalid();
