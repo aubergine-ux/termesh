@@ -1,0 +1,86 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds binaries for every platform and attaches
+# them to a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            asset: termesh-linux-x86_64
+            cmake_args: ""
+          - name: macOS universal
+            os: macos-latest
+            asset: termesh-macos-universal
+            cmake_args: '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0'
+          - name: Windows x86_64
+            os: windows-latest
+            asset: termesh-windows-x86_64
+            cmake_args: ""
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        shell: bash
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTERMESH_STATIC=ON ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir "${{ matrix.asset }}"
+          cp build/termesh README.md LICENSE "${{ matrix.asset }}/"
+          strip "${{ matrix.asset }}/termesh"
+          tar -czf "${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory "${{ matrix.asset }}" | Out-Null
+          Copy-Item build/Release/termesh.exe, README.md, LICENSE "${{ matrix.asset }}/"
+          Compress-Archive -Path "${{ matrix.asset }}" -DestinationPath "${{ matrix.asset }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.zip
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" dist/*
+          --repo "${{ github.repository }}"
+          --title "termesh ${{ github.ref_name }}"
+          --generate-notes
