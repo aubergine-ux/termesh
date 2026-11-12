@@ -66,6 +66,9 @@ TEST_CASE("options: errors are reported, not ignored") {
     CHECK_FALSE(parse({"a.obj", "--ssaa", "9"}).ok);             // out of range
     CHECK_FALSE(parse({"a.obj", "--size", "640"}).ok);           // malformed size
     CHECK_FALSE(parse({"a.obj", "--frobnicate"}).ok);            // unknown option
+    CHECK_FALSE(parse({"a.obj", "--zoom", "nan"}).ok);           // not a finite number
+    CHECK_FALSE(parse({"a.obj", "--yaw", "inf"}).ok);
+    CHECK_FALSE(parse({"a.obj", "--png", ""}).ok);               // empty file name
     CHECK(parse({"a.obj", "--frobnicate"}).error.find("--frobnicate") != std::string::npos);
     // --help and --version need no model.
     CHECK(parse({"--help"}).ok);

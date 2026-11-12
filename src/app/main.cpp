@@ -214,8 +214,13 @@ int main(int argc, char** argv) {
     ThreadPool pool(static_cast<unsigned>(options.threads));
 
     if (options.benchFrames > 0) return runBench(options, model, pool);
-    if (!options.pngPath.empty()) return runPng(options, model, pool);
-    if (!options.gifPath.empty()) return runGif(options, model, pool);
+    // --png and --gif can be combined: one run writes both.
+    if (!options.pngPath.empty() || !options.gifPath.empty()) {
+        int status = 0;
+        if (!options.pngPath.empty()) status = runPng(options, model, pool);
+        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, pool);
+        return status;
+    }
     if (options.print) return runPrint(options, model, pool);
 
     Viewer viewer(options, model, pool);

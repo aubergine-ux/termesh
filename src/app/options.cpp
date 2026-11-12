@@ -1,6 +1,7 @@
 #include "app/options.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string_view>
 
@@ -108,6 +109,7 @@ bool parseFloat(std::string_view text, float& out) {
     char* end = nullptr;
     const float value = std::strtof(copy.c_str(), &end);
     if (end == copy.c_str() || *end != '\0') return false;
+    if (!std::isfinite(value)) return false;  // strtof happily parses "nan" and "inf"
     out = value;
     return true;
 }
@@ -242,9 +244,11 @@ ParseResult parseOptions(int argc, const char* const* argv) {
             if (!parseFloat(value, o.spinSpeed)) return invalid();
         } else if (name == "--png") {
             if (!needValue()) return missing();
+            if (value.empty()) return invalid();
             o.pngPath = std::string(value);
         } else if (name == "--gif") {
             if (!needValue()) return missing();
+            if (value.empty()) return invalid();
             o.gifPath = std::string(value);
         } else if (name == "--size") {
             if (!needValue()) return missing();
