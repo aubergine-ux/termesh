@@ -37,13 +37,26 @@ endif()
 
 # ---------------------------------------------------------------- library ---
 # Everything except main() lives in a static library so the tests can link it.
+add_library(termesh_third_party STATIC third_party/impl.cpp)
+target_include_directories(termesh_third_party SYSTEM PUBLIC third_party)
+if(MSVC)
+    target_compile_options(termesh_third_party PRIVATE /w)
+    target_compile_definitions(termesh_third_party PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(termesh_third_party PRIVATE -w)
+endif()
+
 add_library(termesh_core STATIC
+    src/core/texture.cpp
+    src/core/thread_pool.cpp
     src/output/halfblock.cpp
+    src/pipeline/clip.cpp
     src/raster/rasterizer.cpp
+    src/scene/model.cpp
 )
 target_include_directories(termesh_core PUBLIC src)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)
-target_link_libraries(termesh_core PUBLIC Threads::Threads PRIVATE termesh_warnings)
+target_link_libraries(termesh_core PUBLIC Threads::Threads termesh_third_party PRIVATE termesh_warnings)
 target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSION}")
 
 if(TERMESH_NATIVE AND NOT MSVC)
