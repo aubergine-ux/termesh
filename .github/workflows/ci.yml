@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (GCC)
+            os: ubuntu-latest
+            cmake_args: -DCMAKE_CXX_COMPILER=g++
+          - name: Linux (Clang)
+            os: ubuntu-latest
+            cmake_args: -DCMAKE_CXX_COMPILER=clang++
+          - name: Linux (no SIMD)
+            os: ubuntu-latest
+            cmake_args: -DCMAKE_CXX_FLAGS=-DTERMESH_NO_SIMD
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            cmake_args: ""
+          - name: Windows (MSVC)
+            os: windows-latest
+            cmake_args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # Run the real binary end to end, with no terminal attached.
+      - name: Smoke test
+        shell: bash
+        run: |
+          bin=build/termesh
+          [ -f build/Release/termesh.exe ] && bin=build/Release/termesh.exe
+          "$bin" --version
+          "$bin" --demo knot --png knot.png --size 640x480
+          "$bin" --demo cube --gif cube.gif --size 160x120 --frames 12
+          "$bin" --demo sphere --print --backend ascii --color none --cols 60 --rows 24
+          "$bin" --demo knot --bench 50
+          test -s knot.png && test -s cube.gif
+
+  sanitizers:
+    name: Linux (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Render under sanitizers
+        run: |
+          build/termesh --demo knot --png knot.png --size 320x240
+          build/termesh --demo cube --gif cube.gif --size 160x120 --frames 6
+          build/termesh --demo knot --print --backend sixel --cols 40 --rows 12 > /dev/null
+          build/termesh --demo knot --print --backend braille --cols 40 --rows 12 > /dev/null
