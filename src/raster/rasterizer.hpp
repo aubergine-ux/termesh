@@ -45,6 +45,7 @@ struct RasterTriangle {
     // Translucent: depth-tested against what is already there, but leaves the
     // depth buffer alone, so that surfaces behind it can still be blended in.
     bool blend = false;
+    bool highlight = false;  // belongs to the selected mesh
 };
 
 // What the fragment shader receives for one pixel.

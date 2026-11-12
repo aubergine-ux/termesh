@@ -99,8 +99,10 @@ void computeTangents(Mesh& mesh) {
 void finalizeModel(Model& model) {
     if (model.materials.empty()) model.materials.emplace_back();
     const int count = static_cast<int>(model.materials.size());
-    for (Mesh& mesh : model.meshes)
+    for (Mesh& mesh : model.meshes) {
         if (mesh.material < 0 || mesh.material >= count) mesh.material = 0;
+        if (mesh.name.empty()) mesh.name = model.materials[static_cast<std::size_t>(mesh.material)].name;
+    }
     const int textures = static_cast<int>(model.textures.size());
     for (Material& m : model.materials) {
         for (int* slot : {&m.baseColorTexture, &m.normalTexture, &m.emissiveTexture, &m.metallicRoughnessTexture})

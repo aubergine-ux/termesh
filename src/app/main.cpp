@@ -188,6 +188,10 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     OrbitCamera camera = makeCamera(options, model);
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
+    // The same boxes and BVHs the viewer uses, so the numbers match it.
+    ModelAccel accel(model, &pool);
+    const DrawItem item{&model, Mat4::identity(), &accel};
+
     RenderStats total;
     double poseMs = 0.0;
     const auto start = std::chrono::steady_clock::now();
@@ -198,9 +202,10 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
             const auto poseStart = std::chrono::steady_clock::now();
             player->advance(1.0f / 60.0f);
             applyPose(model, player->pose(), &pool);
+            accel.refresh(model);
             poseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - poseStart).count();
         }
-        const RenderStats s = renderer.render(model, camera.camera(aspect), settings, fb);
+        const RenderStats s = renderer.render(std::span<const DrawItem>(&item, 1), camera.camera(aspect), settings, fb);
         resolve(fb, ssaa, image, pool);
         if (settings.post.fxaa) applyFxaa(image, pool);
         total.vertexMs += s.vertexMs;
@@ -209,6 +214,7 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
         total.shadowMs += s.shadowMs;
         total.postMs += s.postMs;
         total.trianglesDrawn += s.trianglesDrawn;
+        total.trianglesCulled += s.trianglesCulled;
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     const double n = options.benchFrames;
@@ -223,6 +229,9 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     std::printf("per frame    vertex %.2f ms, setup %.2f ms, raster %.2f ms, %.0f triangles drawn\n",
                 total.vertexMs / n, total.setupMs / n, total.rasterMs / n,
                 static_cast<double>(total.trianglesDrawn) / n);
+    if (total.trianglesCulled > 0)
+        std::printf("culling      %.0f triangles per frame skipped before the vertex stage\n",
+                    static_cast<double>(total.trianglesCulled) / n);
     if (total.shadowMs > 0.0 || total.postMs > 0.0)
         std::printf("effects      shadow maps %.2f ms, post-processing %.2f ms\n", total.shadowMs / n,
                     total.postMs / n);

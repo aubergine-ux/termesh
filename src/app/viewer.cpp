@@ -33,6 +33,7 @@ const char* const kHelpLines[] = {
     ("termesh " TERMESH_VERSION),
     "",
     "drag, arrows, h j k l      orbit",
+    "click                      select the mesh under the pointer",
     "right-drag, H J K L        pan",
     "wheel, + -                 zoom",
     "space                      auto-rotate on / off",
@@ -88,6 +89,7 @@ Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, co
     : options_(options), model_(model), player_(player), pool_(pool), renderer_(pool) {
     settings_ = makeRenderSettings(options);
     settings_.skybox = wantsSkybox(options, environment);
+    accel_.build(model_, &pool_);
     lightYaw_ = radians(options.lightAngle);
     dither_ = options.dither;
     outlineAuto_ = !options.outline.has_value();
@@ -176,7 +178,10 @@ void Viewer::drawFrame() {
     lastFrameTime_ = now;
     if (autoRotate_ && !dragging_) camera_.yaw += radians(options_.spinSpeed) * static_cast<float>(dt);
     // Move the animation clock on, and re-skin the model if that changed the pose.
-    if (player_ && player_->advance(static_cast<float>(dt))) applyPose(model_, player_->pose(), &pool_);
+    if (player_ && player_->advance(static_cast<float>(dt))) {
+        applyPose(model_, player_->pose(), &pool_);
+        accel_.refresh(model_);  // the boxes follow the pose; trees are rebuilt only if someone clicks
+    }
 
     RenderSettings settings = frameSettings();
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
@@ -184,8 +189,8 @@ void Viewer::drawFrame() {
     settings.wireWidth = static_cast<float>(supersampling_);
     settings.pixelScale = static_cast<float>(supersampling_);
 
-    const float aspect = static_cast<float>(imageWidth_) * backend_->pixelAspect() / static_cast<float>(imageHeight_);
-    stats_ = renderer_.render(model_, camera_.camera(aspect), settings, framebuffer_);
+    const DrawItem item{&model_, Mat4::identity(), &accel_};
+    stats_ = renderer_.render(std::span<const DrawItem>(&item, 1), currentCamera(), settings, framebuffer_);
 
     const auto presentStart = Clock::now();
     ImageView view = viewOf(framebuffer_);
@@ -450,7 +455,45 @@ RenderSettings Viewer::frameSettings() const {
     settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
     settings.environment = &environments_[environment_];
     if (outlineAuto_) settings.post.outline = settings_.shading == ShadingMode::Toon;
+    if (selectedMesh_ >= 0) {
+        settings.highlightItem = 0;
+        settings.highlightMesh = selectedMesh_;
+    }
     return settings;
+}
+
+Camera Viewer::currentCamera() const {
+    const float aspect = static_cast<float>(imageWidth_) * backend_->pixelAspect() / static_cast<float>(imageHeight_);
+    return camera_.camera(aspect);
+}
+
+// Click to select: cast a ray through the middle of the clicked cell and
+// find the first triangle it meets.
+void Viewer::pickAt(int col, int row) {
+    if (col < 0 || row < 0 || col >= area_.cols || row >= area_.rows) return;
+    const float ndcX = (static_cast<float>(col) + 0.5f) / static_cast<float>(area_.cols) * 2.0f - 1.0f;
+    const float ndcY = 1.0f - (static_cast<float>(row) + 0.5f) / static_cast<float>(area_.rows) * 2.0f;
+
+    accel_.updateTrees(model_, &pool_);  // out of date if an animation has moved the vertices
+    const DrawItem item{&model_, Mat4::identity(), &accel_};
+    PickResult hit;
+    if (!pick(std::span<const DrawItem>(&item, 1), currentCamera(), ndcX, ndcY, settings_.cullBackfaces, hit)) {
+        if (selectedMesh_ >= 0) notify("selection cleared");
+        selectedMesh_ = -1;
+        dirty_ = true;
+        return;
+    }
+    selectedMesh_ = hit.mesh;
+    const Mesh& mesh = model_.meshes[static_cast<std::size_t>(hit.mesh)];
+    const Material& material = model_.materials[static_cast<std::size_t>(mesh.material)];
+    std::string text = "mesh " + std::to_string(hit.mesh + 1) + "/" + std::to_string(model_.meshes.size());
+    if (!mesh.name.empty()) text += " '" + mesh.name + "'";
+    text += ": " + formatCount(mesh.indices.size() / 3) + " tris, " + formatCount(mesh.vertices.size()) + " verts";
+    if (!material.name.empty() && material.name != mesh.name) text += ", material '" + material.name + "'";
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), ", metallic %.2f rough %.2f", material.metallic, material.roughness);
+    text += buf;
+    notify(text);
 }
 
 // Lighting and post-processing toggles.
@@ -579,18 +622,22 @@ void Viewer::handleMouse(const MouseEvent& mouse) {
             break;
         case MouseEvent::Type::Press:
             dragging_ = true;
+            dragMoved_ = false;
             // Shift+drag pans, for mice and trackpads without a right button.
             dragButton_ = mouse.shift ? 2 : mouse.button;
             lastMouseCol_ = mouse.col;
             lastMouseRow_ = mouse.row;
             break;
         case MouseEvent::Type::Release:
+            // A press and release without movement in between is a click.
+            if (dragging_ && !dragMoved_ && dragButton_ == 0) pickAt(mouse.col, mouse.row);
             dragging_ = false;
             lastFrameTime_ = Clock::now();  // resume spinning without a jump
             dirty_ = true;
             break;
         case MouseEvent::Type::Drag: {
             if (!dragging_) break;
+            if (mouse.col != lastMouseCol_ || mouse.row != lastMouseRow_) dragMoved_ = true;
             // Convert the movement from cells to pixels so that horizontal
             // and vertical drags feel the same despite cells being tall.
             const float dx = static_cast<float>((mouse.col - lastMouseCol_) * area_.cellWidth);

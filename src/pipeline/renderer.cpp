@@ -1,6 +1,7 @@
 #include "pipeline/renderer.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 
@@ -27,6 +28,7 @@ struct Renderer::GeometryPass {
     int width = 0, height = 0;
     VaryingLayout layout = VaryingLayout::PerPixel;
     bool flat = false;  // Lit only: light once per face rather than per vertex
+    int highlightItem = -1, highlightMesh = -1;
     bool cullBackfaces = true;
     // Draw translucent materials last, back to front, without depth writes.
     bool sortTranslucent = false;
@@ -51,6 +53,10 @@ constexpr int kNormal = 2, kWorld = 5, kTangent = 8;  // per pixel
 constexpr int kDepthVaryingCount = 2;
 constexpr int kLitVaryingCount = 8;
 constexpr int kPerPixelVaryingCount = 11;
+
+// Below this a mesh is not worth a BVH traversal: the per-triangle clip test
+// that would reject its hidden triangles anyway is cheaper.
+constexpr std::size_t kMinTrianglesForBvhCulling = 1024;
 
 constexpr int kTrianglesPerChunk = 512;
 constexpr int kVerticesPerChunk = 2048;
@@ -244,6 +250,8 @@ struct FragmentShader {
         color += emissive;
 
         if (wireframe) color = lerp(color, Vec3(1.0f), 0.3f);
+        // The selected mesh: mixed towards a warm highlight colour.
+        if (tri.highlight) color = lerp(color, Vec3{1.0f, 0.5f, 0.08f}, 0.4f) + Vec3{0.12f, 0.06f, 0.0f};
 
         if (translucent) output.translucent(out, color, std::min(base.w, 1.0f));
         else output.opaque(out, color);
@@ -279,6 +287,7 @@ struct TriangleInfo {
     float tangentSign;
     bool twoSided, needsLod, blend;
     bool mirrored;  // the model transform flips the winding
+    bool highlight;
 };
 
 // Project three clip-space vertices to the screen and append the resulting
@@ -337,6 +346,7 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
     tri.backFacing = backFacing;
     tri.edgeMask = edgeMask;
     tri.blend = info.blend;
+    tri.highlight = info.highlight;
 
     // Mip level. Compare the triangle's area in texture space with its area
     // on screen: their ratio is how much texture one pixel covers. One level
@@ -372,7 +382,8 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
     std::size_t chunkCount = 0;
     std::uint32_t materialBase = 0;
 
-    for (const DrawItem& item : items) {
+    for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
+        const DrawItem& item = items[itemIndex];
         const Model& model = *item.model;
         // Most models sit where they were loaded; skip the matrix maths then.
         const bool placed = !(item.transform == Mat4::identity());
@@ -388,10 +399,42 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
             return placed ? normalize(transformDirection(normalTransform, v.normal)) : v.normal;
         };
 
-        for (const Mesh& mesh : model.meshes) {
+        // Planes of the view volume in the model's own space, to test its
+        // boxes against.
+        const bool haveAccel = item.accel && item.accel->meshCount() == model.meshes.size();
+        const Frustum frustum = haveAccel ? Frustum::fromMatrix(modelViewProjection) : Frustum{};
+
+        for (std::size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex) {
+            const Mesh& mesh = model.meshes[meshIndex];
             const std::size_t triangleCount = mesh.indices.size() / 3;
             if (triangleCount == 0) continue;
             stats.trianglesSubmitted += triangleCount;
+
+            // ------------------------------------------------------- culling
+            // A mesh whose box is entirely outside the view is skipped
+            // before any of its vertices are touched. One that straddles
+            // the edge of the view asks its BVH which triangles could be
+            // inside, as a bitmap in the triangles' own order - so the
+            // survivors are still drawn in exactly the order they always
+            // were, and the picture does not depend on whether culling ran.
+            bool useVisibility = false;
+            if (haveAccel) {
+                const Frustum::Side side = frustum.classify(item.accel->bounds(meshIndex));
+                if (side == Frustum::Side::Outside) {
+                    ++stats.meshesCulled;
+                    stats.trianglesCulled += triangleCount;
+                    continue;
+                }
+                const Bvh* bvh = item.accel->bvh(meshIndex);
+                if (side == Frustum::Side::Intersecting && bvh && triangleCount >= kMinTrianglesForBvhCulling) {
+                    visible_.assign((triangleCount + 63) / 64, 0);
+                    bvh->markVisible(frustum, visible_);
+                    std::size_t kept = 0;
+                    for (const std::uint64_t word : visible_) kept += static_cast<std::size_t>(std::popcount(word));
+                    stats.trianglesCulled += triangleCount - kept;
+                    useVisibility = true;
+                }
+            }
 
             const Material& material = model.materials[mesh.material];
             const bool twoSided = material.doubleSided || !pass.cullBackfaces;
@@ -443,6 +486,8 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
             meshInfo.twoSided = twoSided;
             meshInfo.mirrored = mirrored;
             meshInfo.blend = pass.sortTranslucent && material.alphaMode == AlphaMode::Blend;
+            meshInfo.highlight =
+                static_cast<int>(itemIndex) == pass.highlightItem && static_cast<int>(meshIndex) == pass.highlightMesh;
             meshInfo.needsLod =
                 mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
                                 material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
@@ -456,6 +501,7 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
                 const std::size_t end = std::min(begin + kTrianglesPerChunk, triangleCount);
 
                 for (std::size_t tri = begin; tri < end; ++tri) {
+                    if (useVisibility && !((visible_[tri >> 6] >> (tri & 63)) & 1)) continue;
                     const std::uint32_t i0 = mesh.indices[tri * 3];
                     const std::uint32_t i1 = mesh.indices[tri * 3 + 1];
                     const std::uint32_t i2 = mesh.indices[tri * 3 + 2];
@@ -710,6 +756,8 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     // In wireframe every surface is just a depth mask plus lines.
     pass.sortTranslucent = !settings.wireframe;
     pass.lighting = &lighting;
+    pass.highlightItem = settings.highlightItem;
+    pass.highlightMesh = settings.highlightMesh;
     buildGeometry(items, pass, stats);
 
     // ------------------------------------------------------------ rasterization

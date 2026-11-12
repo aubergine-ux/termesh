@@ -53,6 +53,8 @@ else()
 endif()
 
 add_library(termesh_core STATIC
+    src/accel/bvh.cpp
+    src/accel/model_accel.cpp
     src/anim/player.cpp
     src/anim/pose.cpp
     src/anim/skinning.cpp
@@ -110,6 +112,7 @@ if(TERMESH_BUILD_TESTS)
     enable_testing()
     add_executable(termesh_tests
         tests/test_main.cpp
+        tests/test_accel.cpp
         tests/test_anim.cpp
         tests/test_app.cpp
         tests/test_clip.cpp

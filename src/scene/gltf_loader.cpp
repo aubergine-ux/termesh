@@ -339,6 +339,8 @@ struct GltfContext {
         };
 
         Mesh mesh;
+        if (node.name) mesh.name = node.name;
+        else if (node.mesh && node.mesh->name) mesh.name = node.mesh->name;
         mesh.vertices.resize(count);
         mesh.material = prim.material ? static_cast<int>(prim.material - data->materials) : -1;
 

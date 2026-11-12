@@ -19,7 +19,9 @@
 #include "pipeline/shadow.hpp"
 #include "post/post.hpp"
 #include "raster/rasterizer.hpp"
+#include "accel/model_accel.hpp"
 #include "scene/camera.hpp"
+#include "scene/draw_item.hpp"
 #include "scene/environment.hpp"
 #include "scene/light.hpp"
 #include "scene/model.hpp"
@@ -64,17 +66,18 @@ struct RenderSettings {
     // Supersampling factor the frame will be resolved with, so that effects
     // measured in output pixels (outline width, bloom reach) can scale.
     float pixelScale = 1.0f;
-};
 
-// One thing to draw: a model, and where to put it.
-struct DrawItem {
-    const Model* model = nullptr;
-    Mat4 transform;  // model space -> world space
+    // Draw one mesh tinted, to show it is selected: its position in the
+    // draw list and in its model. -1 for none.
+    int highlightItem = -1, highlightMesh = -1;
 };
 
 struct RenderStats {
     std::size_t trianglesSubmitted = 0;
     std::size_t trianglesDrawn = 0;  // after culling and clipping
+    // Skipped before the vertex stage because their box, or their BVH node,
+    // was outside the view (only for items that come with a ModelAccel).
+    std::size_t meshesCulled = 0, trianglesCulled = 0;
     double vertexMs = 0.0, setupMs = 0.0, rasterMs = 0.0;
     double shadowMs = 0.0, postMs = 0.0;
 
@@ -145,6 +148,7 @@ private:
     std::vector<std::vector<RasterTriangle>> chunks_;
     std::vector<char> chunkBlends_;  // per chunk: holds translucent triangles
     std::vector<const RasterTriangle*> blendOrder_;
+    std::vector<std::uint64_t> visible_;  // one bit per triangle of the mesh being set up
     std::vector<std::vector<const RasterTriangle*>> bins_;
     int binsX_ = 0, binsY_ = 0;
 };

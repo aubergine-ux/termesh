@@ -52,6 +52,7 @@ struct Material {
 // model also carry `rig`, from which the vertices are recomputed every time
 // the pose changes (see anim/skinning.hpp).
 struct Mesh {
+    std::string name;  // from the file where it gives one; otherwise the material's name
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;  // three per triangle, CCW front faces
     int material = 0;

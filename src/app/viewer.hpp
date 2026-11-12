@@ -38,6 +38,8 @@ private:
     void handleMouse(const MouseEvent& mouse);
     bool handleAnimationKey(char32_t ch);  // true if the key was an animation control
     bool handleEffectKey(char32_t ch);     // true if the key was a lighting / effect control
+    void pickAt(int col, int row);         // select the mesh under a cell
+    Camera currentCamera() const;
     RenderSettings frameSettings() const;  // settings_ plus everything decided per frame
 
     // --- output ---
@@ -56,6 +58,9 @@ private:
     AnimationPlayer* player_;
     ThreadPool& pool_;
     Renderer renderer_;
+    // Boxes and BVHs for the model: frustum culling and click-to-select.
+    ModelAccel accel_;
+    int selectedMesh_ = -1;
 
     Terminal terminal_;
     InputParser parser_;
@@ -90,6 +95,7 @@ private:
 
     // Mouse drag state.
     bool dragging_ = false;
+    bool dragMoved_ = false;  // the pointer has moved since the button went down
     int dragButton_ = 0;
     int lastMouseCol_ = 0, lastMouseRow_ = 0;
 
