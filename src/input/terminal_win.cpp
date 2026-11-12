@@ -59,6 +59,15 @@ Terminal::~Terminal() {
 bool Terminal::inputIsTerminal() { return _isatty(_fileno(stdin)) != 0; }
 bool Terminal::outputIsTerminal() { return _isatty(_fileno(stdout)) != 0; }
 bool Terminal::errorIsTerminal() { return _isatty(_fileno(stderr)) != 0; }
+
+void Terminal::prepareOutput() {
+    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    if (GetConsoleMode(output, &mode))
+        SetConsoleMode(output, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    SetConsoleOutputCP(CP_UTF8);
+}
+
 bool Terminal::quitRequested() { return g_quit.load(); }
 
 bool Terminal::enterRawMode() {

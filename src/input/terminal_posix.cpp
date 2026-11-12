@@ -35,6 +35,7 @@ Terminal::~Terminal() {
 bool Terminal::inputIsTerminal() { return isatty(STDIN_FILENO) != 0; }
 bool Terminal::outputIsTerminal() { return isatty(STDOUT_FILENO) != 0; }
 bool Terminal::errorIsTerminal() { return isatty(STDERR_FILENO) != 0; }
+void Terminal::prepareOutput() {}
 bool Terminal::quitRequested() { return g_quit.load(); }
 
 bool Terminal::enterRawMode() {

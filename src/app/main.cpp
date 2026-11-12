@@ -131,6 +131,7 @@ int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
 
     std::string out;
     backend->print(image.view(), out);
+    Terminal::prepareOutput();
     std::fwrite(out.data(), 1, out.size(), stdout);
     std::fflush(stdout);
     return 0;

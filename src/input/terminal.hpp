@@ -28,6 +28,10 @@ public:
     static bool outputIsTerminal();
     static bool errorIsTerminal();
 
+    // Make stdout ready for escape sequences and UTF-8 without entering raw
+    // mode. Only Windows needs to do anything here.
+    static void prepareOutput();
+
     // Switch input to raw mode: no echo, no line buffering, keys delivered
     // as they are pressed. Returns false if stdin / stdout is not a terminal.
     bool enterRawMode();
