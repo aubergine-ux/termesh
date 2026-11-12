@@ -115,6 +115,9 @@ std::string usageText() {
                        "      --demo <name>      built-in model: ") +
            demos +
            "\n"
+           "                         ...or \"physics\": crates and balls falling, colliding and coming\n"
+           "                         to rest (Enter throws a ball, Backspace starts again)\n"
+           "      --bodies <n>       how many things the physics demo starts with (default: 28)\n"
            "  -h, --help             show this help\n"
            "  -V, --version          show the version\n"
            "\n"
@@ -411,6 +414,7 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         else if (name == "--paused") o.animationPaused = true;
         else if (name == "--no-path") o.followPath = false;
         else if (name == "--shadows") o.shadows = true;
+        else if (name == "--no-shadows") o.shadows = false;
         else if (name == "--skybox") o.skybox = true;
         else if (name == "--no-skybox") o.skybox = false;
         else if (name == "--ssao") o.ssao = true;
@@ -428,6 +432,9 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
         else if (name == "--demo") {
             if (!needValue()) return missing();
             o.demo = std::string(value);
+        } else if (name == "--bodies") {
+            if (!needValue()) return missing();
+            if (!intOption(o.bodies, 1, 200)) return invalid();
         } else if (name == "-b" || name == "--backend") {
             if (!needValue()) return missing();
             if (value != "auto") {

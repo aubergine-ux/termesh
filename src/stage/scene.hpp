@@ -31,6 +31,23 @@ struct SceneObject {
     bool visible = true;
 };
 
+// Something that moves a scene's objects by itself, frame by frame: a
+// physics simulation, say. The scene only knows this much about it.
+class SceneDriver {
+public:
+    virtual ~SceneDriver() = default;
+    // Move on by `dt` seconds. Returns true if anything moved.
+    virtual bool update(float dt) = 0;
+    // Whether anything is still moving (so the picture needs redrawing).
+    virtual bool active() const = 0;
+    // Start again from the beginning.
+    virtual void reset() = 0;
+    // The user did something at the scene, from `origin` in `direction`.
+    virtual void poke(Vec3 origin, Vec3 direction) = 0;
+    // One line for the help screen about what poke() and reset() do.
+    virtual const char* hint() const = 0;
+};
+
 class Scene {
 public:
     Scene() = default;
@@ -51,6 +68,9 @@ public:
 
     std::optional<CameraPose> camera;  // a fixed view to start from
     CameraPath cameraPath;             // empty: none
+
+    // Set for scenes that move by themselves (see SceneDriver).
+    std::shared_ptr<SceneDriver> driver;
 
     // The "render" block of a scene file, for the application to apply as
     // its defaults. Null when there was none.

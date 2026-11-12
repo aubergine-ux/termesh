@@ -19,6 +19,7 @@ struct Options {
     std::vector<std::string> inputs;
     std::string modelPath;  // the first of `inputs`
     std::string demo;
+    int bodies = 28;  // how many things the physics demo starts with
 
     // Output selection (unset = detect).
     std::optional<BackendKind> backend;

@@ -102,6 +102,8 @@ add_library(termesh_core OBJECT
     src/output/cell_backends.cpp
     src/output/cell_grid.cpp
     src/output/pixel_backends.cpp
+    src/physics/demo.cpp
+    src/physics/world.cpp
     src/pipeline/clip.cpp
     src/pipeline/renderer.cpp
     src/pipeline/resolve.cpp
@@ -314,6 +316,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_lod.cpp
         tests/test_math.cpp
         tests/test_output.cpp
+        tests/test_physics.cpp
         tests/test_post.cpp
         tests/test_raster.cpp
         tests/test_record.cpp

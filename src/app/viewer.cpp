@@ -66,6 +66,7 @@ const char* const kHelpLines[] = {
     "o                          status bar on / off",
     "p                          save a PNG of the view",
     "R                          start / stop recording (.cast; see --record)",
+    "Enter  Backspace           physics demo: throw a ball / start again",
     "?                          this help",
     "q, Esc                     quit",
     "",
@@ -591,6 +592,20 @@ void Viewer::handleKey(const KeyEvent& key) {
             followInspector();
             return;
         }
+    }
+
+    // A scene that simulates something takes two keys of its own.
+    if (scene_.driver && (key.key == Key::Enter || key.key == Key::Backspace)) {
+        if (key.key == Key::Enter) {
+            // Throw from where the camera is, the way it is looking: the
+            // view matrix's third row is the direction behind the camera.
+            const Camera camera = currentCamera();
+            scene_.driver->poke(camera.position, {-camera.view(2, 0), -camera.view(2, 1), -camera.view(2, 2)});
+        } else {
+            scene_.driver->reset();
+        }
+        dirty_ = true;
+        return;
     }
 
     const float orbitStep = radians(10.0f), panStep = 0.06f;

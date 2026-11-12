@@ -71,13 +71,14 @@ bool Scene::animated() const {
 }
 
 bool Scene::playing() const {
+    if (driver && driver->active()) return true;
     return std::any_of(objects.begin(), objects.end(), [](const auto& object) {
         return object->player && (object->player->playing() || object->player->fading());
     });
 }
 
 bool Scene::update(float dt, ThreadPool* pool) {
-    bool moved = false;
+    bool moved = driver && driver->update(dt);
     for (const auto& object : objects) {
         if (!object->player || !object->player->advance(dt)) continue;
         applyPose(object->model, object->player->pose(), pool);

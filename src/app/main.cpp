@@ -126,7 +126,10 @@ int runGif(const Options& options, Scene& scene, ThreadPool& pool) {
     const View view(options, scene);
     // Spin the same way as the interactive viewer; a negative speed reverses.
     const float direction = options.spinSpeed < 0.0f ? -1.0f : 1.0f;
-    const bool spin = !view.usesPath() && (!scene.animated() || options.spinExplicit);
+    // A scene that moves by itself (the physics demo) is watched from a
+    // fixed camera for a few seconds.
+    const bool simulated = scene.driver != nullptr;
+    const bool spin = !view.usesPath() && ((!scene.animated() && !simulated) || options.spinExplicit);
 
     // Where each animation starts, so that every frame can be placed
     // exactly rather than accumulated.
@@ -142,7 +145,7 @@ int runGif(const Options& options, Scene& scene, ThreadPool& pool) {
     // that it repeats seamlessly.
     int frameCount = options.frames;
     if (frameCount <= 0) {
-        const float seconds = view.usesPath() ? view.pathDuration() : loopSeconds;
+        const float seconds = view.usesPath() ? view.pathDuration() : (simulated ? 8.0f : loopSeconds);
         frameCount =
             seconds > 0.0f
                 ? std::clamp(static_cast<int>(std::lround(seconds * static_cast<float>(options.gifFps))), 2, 2000)
@@ -162,6 +165,7 @@ int runGif(const Options& options, Scene& scene, ThreadPool& pool) {
             if (AnimationPlayer* player = scene.objects[k]->player.get())
                 player->seek(startTimes[k] + player->speed() * seconds);
         scene.pose(&pool);
+        if (simulated && i > 0) scene.driver->update(1.0f / static_cast<float>(options.gifFps));
 
         const std::vector<DrawItem> items = scene.drawItems();
         frames.push_back(renderOffscreen(
@@ -528,6 +532,9 @@ int main(int argc, char** argv) {
         }
     }
     if (!setUpAnimations(options, scene, pool)) return 2;
+    // --anim-time also runs a simulation forward to that moment.
+    if (scene.driver && options.animationTimeSet)
+        for (float t = 0.0f; t < options.animationTime; t += 1.0f / 60.0f) scene.driver->update(1.0f / 60.0f);
 
     if (options.preview) {
         const std::string out = renderPreview(options, scene, preview, pool);

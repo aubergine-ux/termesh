@@ -1,8 +1,10 @@
 #include "app/setup.hpp"
 
 #include <cstdio>
+#include <memory>
 #include <string>
 
+#include "physics/demo.hpp"
 #include "scene/loader.hpp"
 #include "scene/primitives.hpp"
 #include "stage/scene_file.hpp"
@@ -10,6 +12,15 @@
 namespace termesh {
 
 bool buildScene(int argc, const char* const* argv, Options& options, ThreadPool& pool, Scene& scene) {
+    if (options.demo == "physics") {
+        scene.driver = std::make_shared<PhysicsDemo>(scene, options.bodies);
+        // Shadows are what make things look as if they rest on the floor:
+        // on for this demo, unless the command line says otherwise.
+        Options defaults;
+        defaults.shadows = true;
+        options = parseOptions(argc, argv, defaults).options;
+        return true;
+    }
     if (!options.demo.empty()) {
         Model model = makeDemoModel(options.demo);
         if (model.meshes.empty()) {

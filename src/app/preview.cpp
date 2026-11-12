@@ -59,7 +59,8 @@ std::string previewCacheKey(const std::string& path, const std::string& paramete
     std::ostringstream identity;
     identity << TERMESH_VERSION << '\n'
              << absolute.string() << '\n'
-             << size << '\n'
+             << size
+             << '\n'
              // (Some standard libraries count file times in a type wider
              // than any that streams know how to print.)
              << static_cast<long long>(modified.time_since_epoch().count()) << '\n'
