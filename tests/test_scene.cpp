@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -367,6 +368,51 @@ TEST_CASE("obj: errors and warnings") {
     CHECK(noMtl.model.materials.size() == 1);  // the default material
 
     CHECK_FALSE(loadModel("model.stl").ok);
+}
+
+TEST_CASE("obj: comments, malformed lines and odd indices") {
+    TempDir dir;
+    // A comment ends its own line and nothing else; CRLF endings and a
+    // missing final newline are fine.
+    const LoadResult commented = loadModel(dir.write(
+        "c.obj", "v 0 0 0 # origin\r\nv 1 0 0\r\n# f 1 2 3\r\nv 0 1 0\r\nv 1 1 0\r\nf 1 2 3 # first\r\nf 2 4 3"));
+    REQUIRE(commented.ok);
+    CHECK(commented.model.triangleCount() == 2);
+
+    // Corners that point outside the arrays are dropped; a face left with
+    // fewer than three corners disappears. Negative indices count backwards.
+    const LoadResult indices = loadModel(dir.write(
+        "i.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 9\nf 0 1 2\nf -3 -2 -1\nf 1/7/7 2/7/7 3/7/7\nf x y z\nf\n"));
+    REQUIRE(indices.ok);
+    CHECK(indices.model.triangleCount() == 2);
+
+    // An empty "mtllib" is ignored rather than reported as a missing file.
+    const LoadResult noName = loadModel(dir.write("m.obj", "mtllib\nusemtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"));
+    REQUIRE(noName.ok);
+    CHECK(noName.warnings.empty());
+}
+
+TEST_CASE("obj: a large file loads in linear time") {
+    // 200k triangles with no comment anywhere: scanning for '#' beyond the
+    // current line used to make this quadratic (minutes instead of a blink).
+    const int n = 316;
+    std::string text;
+    text.reserve(8u << 20);
+    for (int j = 0; j <= n; ++j)
+        for (int i = 0; i <= n; ++i) text += "v " + std::to_string(i) + " 0 " + std::to_string(j) + "\n";
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const int a = j * (n + 1) + i + 1, b = a + n + 1;
+            text += "f " + std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(a + 1) + "\n";
+            text += "f " + std::to_string(a + 1) + " " + std::to_string(b) + " " + std::to_string(b + 1) + "\n";
+        }
+    TempDir dir;
+    const auto start = std::chrono::steady_clock::now();
+    const LoadResult big = loadModel(dir.write("big.obj", text));
+    const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+    REQUIRE(big.ok);
+    CHECK(big.model.triangleCount() == static_cast<std::size_t>(2 * n * n));
+    CHECK(elapsed.count() < 20.0);  // generous: the quadratic version needs far longer
 }
 
 TEST_CASE("gltf: embedded buffer, node transform and material") {

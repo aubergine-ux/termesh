@@ -89,8 +89,11 @@ void forEachLine(const std::string& text, Fn&& fn) {
         if (lineEnd == std::string::npos) lineEnd = text.size();
         std::size_t end = lineEnd;
         if (end > pos && text[end - 1] == '\r') --end;
-        const std::size_t hash = text.find('#', pos);
-        if (hash < end) end = hash;
+        // Look for a comment inside this line only: searching the rest of the
+        // file for every line would make loading quadratic.
+        if (end > pos)
+            if (const void* hash = std::memchr(data + pos, '#', end - pos))
+                end = static_cast<std::size_t>(static_cast<const char*>(hash) - data);
         LineParser line{data + pos, data + end};
         if (!line.atEnd()) fn(line);
         pos = lineEnd + 1;
@@ -335,7 +338,7 @@ LoadResult loadObj(const std::string& path) {
             currentMaterial = it != ctx.materialByName.end() ? it->second : -1;
             selectBuilder();
         } else if (key == "mtllib") {
-            ctx.loadMaterials(line.rest());
+            if (const std::string file = line.rest(); !file.empty()) ctx.loadMaterials(file);
             builder = nullptr;  // material indices may have changed meaning
         }
     });
