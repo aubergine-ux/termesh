@@ -198,7 +198,11 @@ public:
 
 private:
     static constexpr int kRedLevels = 6, kGreenLevels = 7, kBlueLevels = 6;
-    static constexpr int kPaletteSize = kRedLevels * kGreenLevels * kBlueLevels;  // 252
+    static constexpr int kCubeSize = kRedLevels * kGreenLevels * kBlueLevels;  // 252
+    // One extra entry holds the exact background colour, so the empty area
+    // around the model is flat instead of a dither pattern.
+    static constexpr int kBackgroundIndex = kCubeSize;
+    static constexpr int kPaletteSize = kCubeSize + 1;
 
     // Ordered (Bayer) dithering: before rounding each channel to the nearest
     // palette level, nudge it by a position-dependent threshold. Neighbouring
@@ -217,10 +221,16 @@ private:
 
         // Pass 1: reduce every pixel to a palette index.
         indices_.resize(static_cast<std::size_t>(width) * height);
+        Color8 background{0, 0, 0, 0};
         for (int y = 0; y < height; ++y) {
             const Color8* row = image.row(y);
             std::uint8_t* dst = indices_.data() + static_cast<std::size_t>(y) * width;
             for (int x = 0; x < width; ++x) {
+                if (row[x].a == 0) {  // nothing was drawn here
+                    background = row[x];
+                    dst[x] = static_cast<std::uint8_t>(kBackgroundIndex);
+                    continue;
+                }
                 const int t = bayer[y & 3][x & 3];
                 const int r = quantize(row[x].r, kRedLevels, t);
                 const int g = quantize(row[x].g, kGreenLevels, t);
@@ -233,7 +243,15 @@ private:
         appendInt(out, width * zoom_);
         out += ';';
         appendInt(out, height * zoom_);
-        for (int i = 0; i < kPaletteSize; ++i) {
+        out += '#';
+        appendInt(out, kBackgroundIndex);
+        out += ";2;";
+        appendInt(out, (background.r * 100 + 127) / 255);
+        out += ';';
+        appendInt(out, (background.g * 100 + 127) / 255);
+        out += ';';
+        appendInt(out, (background.b * 100 + 127) / 255);
+        for (int i = 0; i < kCubeSize; ++i) {
             const int b = i % kBlueLevels, g = i / kBlueLevels % kGreenLevels, r = i / (kBlueLevels * kGreenLevels);
             out += '#';
             appendInt(out, i);
