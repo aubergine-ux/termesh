@@ -53,7 +53,10 @@ add_library(termesh_core STATIC
     src/pipeline/clip.cpp
     src/pipeline/renderer.cpp
     src/pipeline/resolve.cpp
+    src/scene/gltf_loader.cpp
+    src/scene/loader.cpp
     src/scene/model.cpp
+    src/scene/obj_loader.cpp
     src/scene/primitives.cpp
 )
 target_include_directories(termesh_core PUBLIC src)

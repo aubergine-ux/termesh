@@ -8,6 +8,7 @@
 #include "core/image.hpp"
 #include "pipeline/renderer.hpp"
 #include "pipeline/resolve.hpp"
+#include "scene/loader.hpp"
 #include "scene/primitives.hpp"
 
 using namespace termesh;
@@ -23,7 +24,18 @@ int main(int argc, char** argv) {
         if (mode == "wire") settings.wireframe = true;
     }
 
-    Model model = makeDemoModel(name);
+    Model model;
+    if (name.find('.') != std::string::npos) {
+        LoadResult loaded = loadModel(name);
+        for (const auto& w : loaded.warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+        if (!loaded.ok) {
+            std::fprintf(stderr, "error: %s\n", loaded.error.c_str());
+            return 1;
+        }
+        model = std::move(loaded.model);
+    } else {
+        model = makeDemoModel(name);
+    }
     if (model.meshes.empty()) {
         std::fprintf(stderr, "unknown demo model '%s'\n", name.c_str());
         return 1;
