@@ -167,15 +167,16 @@ static Texture fromStb(stbi_uc* data, int width, int height, bool srgb) {
 
 Texture loadTexture(const std::string& path, bool srgb) {
     int width = 0, height = 0, channels = 0;
-    Texture texture = fromStb(stbi_load(path.c_str(), &width, &height, &channels, 4), width, height, srgb);
+    stbi_uc* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+    Texture texture = fromStb(data, width, height, srgb);
     texture.name = path;
     return texture;
 }
 
 Texture loadTextureFromMemory(const unsigned char* data, std::size_t size, bool srgb) {
     int width = 0, height = 0, channels = 0;
-    return fromStb(stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, 4),
-                   width, height, srgb);
+    stbi_uc* decoded = stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, 4);
+    return fromStb(decoded, width, height, srgb);
 }
 
 // The slope of the height field in u and v gives the two tangent directions;
