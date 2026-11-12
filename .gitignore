@@ -1,0 +1,10 @@
+/build*/
+/compile_commands.json
+/samples/
+*.png
+*.gif
+!docs/**/*.png
+!docs/**/*.gif
+.vscode/
+.idea/
+.cache/
