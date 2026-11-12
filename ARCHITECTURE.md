@@ -1262,11 +1262,17 @@ a termesh `Model`; the price is that animation does not come through.
 - **No per-frame allocation.** Clip vertices, triangle lists and tile bins
   are kept between frames.
 - **SIMD is used where it pays**: coverage and depth rejection, which run for
-  every pixel in every bounding box. Shading stays scalar and readable - and
-  on GCC the auto-vectoriser is told to leave the fragment shader alone
-  (`-fno-tree-slp-vectorize` for `renderer.cpp`): packing pairs of a
+  every pixel in every bounding box, and the tone curve, where the three
+  colour channels go through identical arithmetic. Shading stays scalar and
+  readable - and on GCC the auto-vectoriser is told to leave the fragment
+  shader alone (`TERMESH_NO_SLP` in `shading.hpp`): packing pairs of a
   three-component vector into SSE registers costs more in shuffles than it
   saves, about 10% of the frame.
+- **The shader is compiled more than once.** It is a template over where its
+  output goes (straight to 8 bits, or to the HDR buffer) and over whether the
+  frame uses the optional per-pixel features (splats, vertex colours,
+  translucency, the selection highlight). A frame that needs none of them
+  runs a version in which those tests do not exist.
 - **Features cost nothing until used.** A frame without translucency or
   whole-frame effects never touches the HDR buffer; shadow maps are only
   drawn for lights that cast them; the two-colour environment is inlined.

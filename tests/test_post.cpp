@@ -68,6 +68,20 @@ TEST_CASE("tone mapping: every curve is monotonic and stays in range") {
     CHECK(toneMap(1.0f, ToneMapper::Reinhard) == Approx(0.5f));
 }
 
+TEST_CASE("tone mapping: the SIMD curve for a whole colour matches the scalar one exactly") {
+    for (int i = 0; i <= 4000; ++i) {
+        const float x = static_cast<float>(i) * 0.005f;  // 0 .. 20
+        const Vec3 in{x, x * 0.37f + 0.01f, 20.0f - x};
+        const Vec3 out = toneMapAces(in);
+        REQUIRE(out.x == toneMapAces(in.x));
+        REQUIRE(out.y == toneMapAces(in.y));
+        REQUIRE(out.z == toneMapAces(in.z));
+        REQUIRE(toneMap(in) == out);  // ACES is the default
+    }
+    // Negative light is black, and nothing is brighter than white.
+    CHECK(toneMapAces(Vec3{-5.0f, 0.0f, 1e9f}) == Vec3{0.0f, 0.0f, 1.0f});
+}
+
 TEST_CASE("post: presenting a frame applies exposure, the curve and the background") {
     HdrFramebuffer hdr(4, 1);
     hdr.at(0, 0) = Vec4(0.25f, 0.25f, 0.25f, 1.0f);  // geometry

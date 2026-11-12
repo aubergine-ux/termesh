@@ -129,12 +129,13 @@ bool isSolid(const Renderer::MaterialRef& ref, const RasterTriangle& tri, const 
 struct HdrOutput {
     using Pixel = Vec4;
 
-    void opaque(Vec4& out, Vec3 color) const { out = Vec4(color, 1.0f); }
+    // (These run once per pixel: see the note on inlining in shading.hpp.)
+    TERMESH_FORCE_INLINE void opaque(Vec4& out, Vec3 color) const { out = Vec4(color, 1.0f); }
     // The "over" operator: this surface covers `alpha` of the pixel and
     // lets the rest of what was already there show through. Coverage
     // accumulates the same way, so that the background can be mixed in
     // afterwards by whatever is left.
-    void translucent(Vec4& out, Vec3 color, float alpha) const {
+    TERMESH_FORCE_INLINE void translucent(Vec4& out, Vec3 color, float alpha) const {
         out = Vec4(color * alpha + out.xyz() * (1.0f - alpha), alpha + out.w * (1.0f - alpha));
     }
     // Looks empty, but is not: see the wireframe fill.
@@ -150,14 +151,25 @@ struct DirectOutput {
     ToneMapper mapper;
     Color8 empty;  // the background colour with alpha 0: "no geometry here"
 
-    void opaque(Color8& out, Vec3 color) const { out = linearToSrgb(toneMap(color * exposure, mapper)); }
-    void translucent(Color8& out, Vec3 color, float) const { opaque(out, color); }
+    TERMESH_FORCE_INLINE void opaque(Color8& out, Vec3 color) const {
+        out = linearToSrgb(toneMap(color * exposure, mapper));
+    }
+    TERMESH_FORCE_INLINE void translucent(Color8& out, Vec3 color, float) const { opaque(out, color); }
     void nothing(Color8& out) const { out = empty; }
 };
 
-template <typename Output>
+// `Extras` switches on the parts most frames never need: point splats,
+// per-vertex colours, translucency and the selection highlight. Each is only
+// a test or two per pixel, but the shader runs for every pixel of every
+// frame and together they were a measurable share of the default path. A
+// frame that uses none of them gets the version compiled with Extras =
+// false, in which those tests do not exist.
+template <typename Output, bool Extras>
 struct FragmentShader {
     using Pixel = typename Output::Pixel;
+    // For the rasterizer: whether this shader ever blends with what is
+    // already in the framebuffer (and so needs to be handed it).
+    static constexpr bool kMayBlend = Extras;
 
     Output output;
     const Renderer::MaterialRef* materials;
@@ -177,7 +189,7 @@ struct FragmentShader {
     // Triangle interiors.
     bool operator()(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
         // (Splats have no edges to draw: in wireframe they stay as they are.)
-        if (!wireframe || tri.splat) return shade(tri, frag, out);
+        if (!wireframe || (Extras && tri.splat)) return shade(tri, frag, out);
         // Leave the pixel looking empty, but still occupy the depth buffer so
         // that lines behind this surface stay hidden. Cut-outs remain
         // see-through.
@@ -190,26 +202,28 @@ struct FragmentShader {
     // lightened so they read against a dark background.
     bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const { return shade(tri, frag, out); }
 
-    bool shade(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
+    TERMESH_NO_SLP bool shade(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
         const Renderer::MaterialRef& ref = materials[tri.material];
         const Material& material = *ref.material;
         const float* v = frag.varyings;
         const Vec2 uv{v[kUV], v[kUV + 1]};
         // A splat's "texture coordinates" are its own: -1 to 1 across the
         // square. Keep the disc, and sample no textures with them.
-        if (tri.splat && uv.x * uv.x + uv.y * uv.y > 1.0f) return false;
-        const bool useTextures = textures && !tri.splat;
+        const bool splat = Extras && tri.splat;
+        if (splat && uv.x * uv.x + uv.y * uv.y > 1.0f) return false;
+        const bool useTextures = textures && !splat;
 
         // Base colour, and alpha cut-outs (leaves, fences, decals).
         Vec4 base = material.baseColor;
-        if (tri.vertexColor) base = Vec4(base.xyz() * load3(v + (perPixelLighting ? kPixelColor : kLitColor)), base.w);
-        if (material.baseColorTexture >= 0 && !tri.splat && (useTextures || material.alphaMode != AlphaMode::Opaque)) {
+        const bool vertexColor = Extras && tri.vertexColor;
+        if (vertexColor) base = Vec4(base.xyz() * load3(v + (perPixelLighting ? kPixelColor : kLitColor)), base.w);
+        if (material.baseColorTexture >= 0 && !splat && (useTextures || material.alphaMode != AlphaMode::Opaque)) {
             const Vec4 texel = ref.textures[material.baseColorTexture].sample(uv, tri.lod);
             if (useTextures) base = base * texel;
             else base.w *= texel.w;
         }
         if (material.alphaMode == AlphaMode::Mask && base.w < material.alphaCutoff) return false;
-        const bool translucent = material.alphaMode == AlphaMode::Blend && tri.blend;
+        const bool translucent = Extras && material.alphaMode == AlphaMode::Blend && tri.blend;
         if (translucent && base.w <= 0.004f) return false;  // invisible: do not even touch the pixel
 
         float metallic = material.metallic, roughness = material.roughness, occlusion = 1.0f;
@@ -226,7 +240,7 @@ struct FragmentShader {
             Vec3 n = normalize(load3(v + kNormal));
             if (tri.backFacing) n = -n;
 
-            if (normalMaps && material.normalTexture >= 0 && !tri.vertexColor && !tri.splat) {
+            if (normalMaps && material.normalTexture >= 0 && !vertexColor && !splat) {
                 // A normal map stores directions relative to the surface: x
                 // along the tangent (texture u), y along the bitangent, z
                 // along the surface normal. Rebuild that frame at this pixel
@@ -281,7 +295,7 @@ struct FragmentShader {
 
         if (wireframe) color = lerp(color, Vec3(1.0f), 0.3f);
         // The selected mesh: mixed towards a warm highlight colour.
-        if (tri.highlight) color = lerp(color, Vec3{1.0f, 0.5f, 0.08f}, 0.4f) + Vec3{0.12f, 0.06f, 0.0f};
+        if (Extras && tri.highlight) color = lerp(color, Vec3{1.0f, 0.5f, 0.08f}, 0.4f) + Vec3{0.12f, 0.06f, 0.0f};
 
         if (translucent) output.translucent(out, color, std::min(base.w, 1.0f));
         else output.opaque(out, color);
@@ -415,6 +429,7 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
     std::size_t chunkCount = 0;
     std::uint32_t materialBase = 0;
     std::size_t meshOrdinal = 0;  // counts meshes across the whole draw list
+    passHasExtras_ = false;
 
     for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
         const DrawItem& item = items[itemIndex];
@@ -598,6 +613,7 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
                                  (pass.highlightMesh < 0 || static_cast<int>(meshIndex) == pass.highlightMesh);
             meshInfo.vertexColor = vertexColor;
             meshInfo.splat = splats;
+            passHasExtras_ = passHasExtras_ || vertexColor || splats;
             meshInfo.needsLod = !splats && mesh.hasUVs &&
                                 (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
                                  material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
@@ -991,20 +1007,26 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     // ------------------------------------------------------------ rasterization
     auto t0 = std::chrono::steady_clock::now();
     const int lineWidth = std::max(static_cast<int>(std::lround(settings.wireWidth)), 1);
-    auto makeShader = [&](auto output) {
-        FragmentShader<decltype(output)> shader;
-        shader.output = output;
-        shader.materials = materials_.data();
-        shader.lighting = lighting;
-        shader.eye = camera.position;
-        shader.mode = settings.shading;
-        shader.lineWidth = lineWidth;
-        shader.varyings = pass.varyingCount;
-        shader.perPixelLighting = perPixel;
-        shader.wireframe = settings.wireframe;
-        shader.textures = settings.textures;
-        shader.normalMaps = settings.normalMaps;
-        return shader;
+    // Which version of the shader this frame needs (see FragmentShader).
+    const bool extras = passHasExtras_ || !blendOrder_.empty() || settings.highlightItem >= 0;
+    // Rasterize the frame into `target`, finishing pixels through `output`.
+    auto draw = [&](auto& target, auto output, auto clearColor, const auto& finishTile) {
+        auto run = [&](auto shader) {
+            shader.output = output;
+            shader.materials = materials_.data();
+            shader.lighting = lighting;
+            shader.eye = camera.position;
+            shader.mode = settings.shading;
+            shader.lineWidth = lineWidth;
+            shader.varyings = pass.varyingCount;
+            shader.perPixelLighting = perPixel;
+            shader.wireframe = settings.wireframe;
+            shader.textures = settings.textures;
+            shader.normalMaps = settings.normalMaps;
+            rasterize(target, shader, clearColor, settings.wireframe, lineWidth, finishTile);
+        };
+        if (extras) run(FragmentShader<decltype(output), true>{});
+        else run(FragmentShader<decltype(output), false>{});
     };
 
     Backdrop backdrop;
@@ -1023,17 +1045,15 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     if (!wholeFrame && blendOrder_.empty()) {
         Color8 empty = settings.background;
         empty.a = 0;
-        const auto shader =
-            makeShader(DirectOutput{std::exp2(settings.post.exposure), settings.post.toneMapper, empty});
-        rasterize(fb, shader, empty, settings.wireframe, lineWidth, [](const TileRect&) {});
+        draw(fb, DirectOutput{std::exp2(settings.post.exposure), settings.post.toneMapper, empty}, empty,
+             [](const TileRect&) {});
         stats.rasterMs = msSince(t0);
         return stats;
     }
 
     // Coverage 0 marks "no geometry here".
     hdr_.resize(width, height);
-    const auto shader = makeShader(HdrOutput{});
-    rasterize(hdr_, shader, Vec4(0.0f), settings.wireframe, lineWidth, [&](const TileRect& tile) {
+    draw(hdr_, HdrOutput{}, Vec4(0.0f), [&](const TileRect& tile) {
         // With no whole-frame effects, all that is left to do to a tile is
         // tone mapping; do it now, while its pixels are still in the cache.
         if (!wholeFrame)

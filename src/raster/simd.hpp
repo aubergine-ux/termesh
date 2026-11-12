@@ -46,6 +46,11 @@ struct Float4 {
 inline Float4 operator+(Float4 a, Float4 b) { return {_mm_add_ps(a.v, b.v)}; }
 inline Float4 operator-(Float4 a, Float4 b) { return {_mm_sub_ps(a.v, b.v)}; }
 inline Float4 operator*(Float4 a, Float4 b) { return {_mm_mul_ps(a.v, b.v)}; }
+inline Float4 operator/(Float4 a, Float4 b) { return {_mm_div_ps(a.v, b.v)}; }
+// Lane-wise minimum and maximum. If a lane of `a` is NaN the result is `b`,
+// the same as the scalar expressions the fallback uses.
+inline Float4 min(Float4 a, Float4 b) { return {_mm_min_ps(a.v, b.v)}; }
+inline Float4 max(Float4 a, Float4 b) { return {_mm_max_ps(a.v, b.v)}; }
 
 // Bit i is set when lane i is >= 0. movemask collects the four sign bits, so
 // "non-negative" is simply the complement.
@@ -80,6 +85,11 @@ struct Float4 {
 inline Float4 operator+(Float4 a, Float4 b) { return {vaddq_f32(a.v, b.v)}; }
 inline Float4 operator-(Float4 a, Float4 b) { return {vsubq_f32(a.v, b.v)}; }
 inline Float4 operator*(Float4 a, Float4 b) { return {vmulq_f32(a.v, b.v)}; }
+inline Float4 operator/(Float4 a, Float4 b) { return {vdivq_f32(a.v, b.v)}; }
+// Written as compare-and-select so that a NaN lane of `a` gives `b`, as on
+// the other backends (NEON's own min and max would give NaN).
+inline Float4 min(Float4 a, Float4 b) { return {vbslq_f32(vcltq_f32(a.v, b.v), a.v, b.v)}; }
+inline Float4 max(Float4 a, Float4 b) { return {vbslq_f32(vcgtq_f32(a.v, b.v), a.v, b.v)}; }
 
 namespace detail {
 // NEON has no movemask. Shift each lane's top bit down to bit 0, move it to
@@ -138,6 +148,19 @@ inline Float4 operator-(Float4 a, Float4 b) {
 }
 inline Float4 operator*(Float4 a, Float4 b) {
     return {{a.v[0] * b.v[0], a.v[1] * b.v[1], a.v[2] * b.v[2], a.v[3] * b.v[3]}};
+}
+inline Float4 operator/(Float4 a, Float4 b) {
+    return {{a.v[0] / b.v[0], a.v[1] / b.v[1], a.v[2] / b.v[2], a.v[3] / b.v[3]}};
+}
+inline Float4 min(Float4 a, Float4 b) {
+    Float4 r;
+    for (int i = 0; i < 4; ++i) r.v[i] = a.v[i] < b.v[i] ? a.v[i] : b.v[i];
+    return r;
+}
+inline Float4 max(Float4 a, Float4 b) {
+    Float4 r;
+    for (int i = 0; i < 4; ++i) r.v[i] = a.v[i] > b.v[i] ? a.v[i] : b.v[i];
+    return r;
 }
 
 inline int nonNegativeMask(Int4 a) {

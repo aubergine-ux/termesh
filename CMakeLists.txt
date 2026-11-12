@@ -96,14 +96,6 @@ target_include_directories(termesh_core SYSTEM PUBLIC third_party)
 target_link_libraries(termesh_core PUBLIC Threads::Threads termesh_third_party PRIVATE termesh_warnings)
 target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSION}")
 
-# The fragment shader is a long run of three-component vector arithmetic.
-# GCC's SLP vectoriser packs pairs of those components into SSE registers
-# and then spends more instructions shuffling them in and out than the
-# packing saves: the shader measures about 10% slower with it on.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_source_files_properties(src/pipeline/renderer.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-slp-vectorize)
-endif()
-
 # The optional Assimp backend. Everything termesh needs is in the tree; this
 # trades that for several dozen more file formats.
 if(TERMESH_ASSIMP)

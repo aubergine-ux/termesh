@@ -81,6 +81,20 @@ constexpr bool isTopLeftEdge(std::int32_t ax, std::int32_t ay, std::int32_t bx, 
     return (dy == 0 && dx < 0) || dy > 0;
 }
 
+namespace detail {
+
+// Whether a shader may blend with the pixel already in the framebuffer. A
+// shader says so with a constant, `static constexpr bool kMayBlend`; one
+// that says nothing is assumed to. Shaders that never blend are spared the
+// read of the old pixel and the test of each triangle's blend flag.
+template <typename Shader>
+constexpr bool shaderMayBlend() {
+    if constexpr (requires { Shader::kMayBlend; }) return Shader::kMayBlend;
+    else return true;
+}
+
+}  // namespace detail
+
 // Rasterize `count` triangles into the part of the framebuffer covered by
 // `tile`. Tiles never overlap, so different threads can run this on different
 // tiles of the same framebuffer at once.
@@ -103,6 +117,7 @@ void rasterizeTile(Target& fb, const TileRect& tile, const RasterTriangle* const
 
     const int varyingCount = shader.varyingCount();
     const float slopeBias = shader.depthSlopeBias();
+    constexpr bool mayBlend = detail::shaderMayBlend<Shader>();
 
     for (std::size_t t = 0; t < count; ++t) {
         const RasterTriangle& tri = *triangles[t];
@@ -277,9 +292,9 @@ void rasterizeTile(Target& fb, const TileRect& tile, const RasterTriangle* const
                     for (int k = 0; k < varyingCount; ++k)
                         frag.varyings[k] = b0 * tri.varyings[0][k] + b1 * tri.varyings[1][k] + b2 * tri.varyings[2][k];
 
-                    typename Target::Pixel color = colorRow[x + lane];
+                    typename Target::Pixel color = mayBlend ? colorRow[x + lane] : typename Target::Pixel{};
                     if (!shader(tri, frag, color)) continue;  // discarded (alpha cut-out)
-                    if (!tri.blend) depthRow[x + lane] = depth[lane];
+                    if (!(mayBlend && tri.blend)) depthRow[x + lane] = depth[lane];
                     colorRow[x + lane] = color;
                 }
             }

@@ -161,7 +161,10 @@ private:
     std::vector<std::vector<RasterTriangle>> chunks_;
     std::vector<char> chunkBlends_;  // per chunk: holds translucent triangles
     std::vector<const RasterTriangle*> blendOrder_;
-    std::vector<std::uint64_t> visible_;   // one bit per triangle of the mesh being set up
+    std::vector<std::uint64_t> visible_;  // one bit per triangle of the mesh being set up
+    // Whether the pass just built contains splats or per-vertex colours:
+    // decides which version of the fragment shader the frame needs.
+    bool passHasExtras_ = false;
     std::vector<std::uint8_t> lodChoice_;  // per mesh of the draw list: 0 = original, k = lods[k - 1]
     std::vector<std::vector<const RasterTriangle*>> bins_;
     int binsX_ = 0, binsY_ = 0;

@@ -36,6 +36,18 @@
 #define TERMESH_NO_INLINE __attribute__((noinline))
 #endif
 
+// One more, for GCC only. Its SLP vectoriser sees the fragment shader's long
+// runs of three-component vector arithmetic, packs pairs of components into
+// SSE registers, and then spends more instructions shuffling them in and
+// out than the packing saves: the shader measures about 10% slower for it.
+// Elsewhere the same pass is a help (triangle setup, for one), so it is
+// switched off for the shader alone rather than for the file.
+#if defined(__GNUC__) && !defined(__clang__)
+#define TERMESH_NO_SLP __attribute__((optimize("no-tree-slp-vectorize")))
+#else
+#define TERMESH_NO_SLP
+#endif
+
 namespace termesh {
 
 // A light, digested for the per-pixel loop: everything that is the same for

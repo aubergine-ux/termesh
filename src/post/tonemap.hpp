@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "math/vec.hpp"
+#include "raster/simd.hpp"
 
 namespace termesh {
 
@@ -51,10 +52,24 @@ inline float toneMap(float x, ToneMapper mapper = ToneMapper::Aces) {
         default: return toneMapAces(x);
     }
 }
+// The default curve for a whole colour at once. This runs for every pixel of
+// every frame, and the three channels go through identical arithmetic, so
+// it is written with the same four-wide SIMD type the rasterizer uses: one
+// division instead of three. For any finite input the result is the same,
+// bit for bit, as calling toneMapAces on each channel.
+inline Vec3 toneMapAces(Vec3 c) {
+    using simd::Float4;
+    const float in[4] = {c.x, c.y, c.z, 0.0f};
+    const Float4 x = max(Float4::load(in), Float4::splat(0.0f));
+    const Float4 numerator = x * (x * Float4::splat(2.51f) + Float4::splat(0.03f));
+    const Float4 denominator = x * (x * Float4::splat(2.43f) + Float4::splat(0.59f)) + Float4::splat(0.14f);
+    float out[4];
+    min(numerator / denominator, Float4::splat(1.0f)).store(out);
+    return {out[0], out[1], out[2]};
+}
+
 inline Vec3 toneMap(Vec3 c, ToneMapper mapper = ToneMapper::Aces) {
-    // Choose the curve once per colour rather than once per channel; the
-    // default gets a straight-line path the compiler can vectorise.
-    if (mapper == ToneMapper::Aces) return {toneMapAces(c.x), toneMapAces(c.y), toneMapAces(c.z)};
+    if (mapper == ToneMapper::Aces) return toneMapAces(c);
     return {toneMap(c.x, mapper), toneMap(c.y, mapper), toneMap(c.z, mapper)};
 }
 
