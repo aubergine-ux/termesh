@@ -21,12 +21,14 @@ Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, 
 
     Framebuffer fb(width * ssaa, height * ssaa);
     settings.wireWidth *= static_cast<float>(ssaa);
+    settings.pixelScale = static_cast<float>(ssaa);
     const RenderStats s =
         renderer.render(model, camera.camera(static_cast<float>(width) / static_cast<float>(height)), settings, fb);
     if (stats) *stats = s;
 
     Image resolved;
     resolve(fb, ssaa, resolved, pool);
+    if (settings.post.fxaa) applyFxaa(resolved, pool);
     for (Color8& p : resolved.pixels) p.a = 255;
     if (blocks == 1) return resolved;
 

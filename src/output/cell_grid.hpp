@@ -25,6 +25,9 @@ std::uint32_t packColor(Color8 c, ColorDepth depth);
 // ramp; the first 16 entries are user-themeable, so they are avoided).
 int nearestXterm256(Color8 c);
 
+// The colour of an entry of that palette (16-255).
+Color8 xterm256Color(int index);
+
 struct Cell {
     char32_t glyph = U' ';
     std::uint32_t fg = kDefaultColor, bg = kDefaultColor;

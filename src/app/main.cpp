@@ -23,8 +23,18 @@ using namespace termesh;
 
 namespace {
 
+// The render settings the options describe, lit by `environment`.
+RenderSettings renderSettings(const Options& options, const Environment& environment) {
+    RenderSettings settings = makeRenderSettings(options);
+    settings.lightDirection =
+        transformDirection(rotate({0.0f, 1.0f, 0.0f}, radians(options.lightAngle)), settings.lightDirection);
+    settings.environment = &environment;
+    settings.skybox = wantsSkybox(options, environment);
+    return settings;
+}
+
 // --png: one frame to an image file.
-int runPng(const Options& options, const Model& model, ThreadPool& pool) {
+int runPng(const Options& options, const Model& model, const Environment& environment, ThreadPool& pool) {
     Renderer renderer(pool);
     OffscreenTarget target;
     if (options.width > 0) {
@@ -34,7 +44,7 @@ int runPng(const Options& options, const Model& model, ThreadPool& pool) {
     target.supersampling = options.supersampling > 0 ? options.supersampling : 2;
     target.blocks = options.blocks;
 
-    const RenderSettings settings = makeRenderSettings(options);
+    const RenderSettings settings = renderSettings(options, environment);
     const Image image = renderOffscreen(renderer, pool, model, makeCamera(options, model), settings, target);
     if (!writePng(options.pngPath, image)) {
         std::fprintf(stderr, "termesh: could not write '%s'\n", options.pngPath.c_str());
@@ -47,7 +57,8 @@ int runPng(const Options& options, const Model& model, ThreadPool& pool) {
 // --gif: a looping animation. For a static model that is a full turn of the
 // camera; for an animated one it is one loop of the clip, seen from a fixed
 // camera unless --spin asks for the turn as well.
-int runGif(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool) {
+int runGif(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
+           ThreadPool& pool) {
     Renderer renderer(pool);
     OffscreenTarget target;
     target.width = options.width > 0 ? options.width : 480;
@@ -55,7 +66,7 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, Thread
     target.supersampling = options.supersampling > 0 ? options.supersampling : 3;
     target.blocks = options.blocks;
 
-    const RenderSettings settings = makeRenderSettings(options);
+    const RenderSettings settings = renderSettings(options, environment);
     OrbitCamera camera = makeCamera(options, model);
     const float startYaw = camera.yaw;
     // Spin the same way as the interactive viewer; a negative speed reverses.
@@ -108,7 +119,7 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, Thread
 }
 
 // --print: a single frame written into the terminal's normal scrollback.
-int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
+int runPrint(const Options& options, const Model& model, const Environment& environment, ThreadPool& pool) {
     TerminalCaps caps = capsFromEnvironment();
     Terminal terminal;
     const TerminalSize size = terminal.size();
@@ -134,15 +145,17 @@ int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
 
     const BackendKind kind = options.backend.value_or(chooseBackend(caps));
     const auto backend = makeBackend(kind, caps.color);
+    backend->setDither(options.dither);
     int width = 0, height = 0;
     backend->configure(area, width, height);
 
     int ssaa = options.supersampling > 0 ? options.supersampling : backend->defaultSupersampling();
     while (ssaa > 1 && static_cast<std::int64_t>(width) * ssaa * height * ssaa > kMaxFramebufferPixels) --ssaa;
 
-    RenderSettings settings = makeRenderSettings(options);
+    RenderSettings settings = renderSettings(options, environment);
     settings.wireframe = settings.wireframe || backend->wantsWireframe();
     settings.wireWidth = static_cast<float>(ssaa);
+    settings.pixelScale = static_cast<float>(ssaa);
 
     Renderer renderer(pool);
     Framebuffer fb(width * ssaa, height * ssaa);
@@ -150,6 +163,7 @@ int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
     renderer.render(model, makeCamera(options, model).camera(aspect), settings, fb);
     Image image;
     resolve(fb, ssaa, image, pool);
+    if (settings.post.fxaa) applyFxaa(image, pool);
 
     std::string out;
     backend->print(image.view(), out);
@@ -160,15 +174,17 @@ int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
 }
 
 // --bench: time the renderer alone, with no terminal in the way.
-int runBench(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool) {
+int runBench(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
+             ThreadPool& pool) {
     Renderer renderer(pool);
     const int width = options.width > 0 ? options.width : 640;
     const int height = options.height > 0 ? options.height : 360;
     const int ssaa = options.supersampling > 0 ? options.supersampling : 1;
     Framebuffer fb(width * ssaa, height * ssaa);
     Image image;
-    RenderSettings settings = makeRenderSettings(options);
+    RenderSettings settings = renderSettings(options, environment);
     settings.wireWidth = static_cast<float>(ssaa);
+    settings.pixelScale = static_cast<float>(ssaa);
     OrbitCamera camera = makeCamera(options, model);
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
@@ -186,9 +202,12 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, Thre
         }
         const RenderStats s = renderer.render(model, camera.camera(aspect), settings, fb);
         resolve(fb, ssaa, image, pool);
+        if (settings.post.fxaa) applyFxaa(image, pool);
         total.vertexMs += s.vertexMs;
         total.setupMs += s.setupMs;
         total.rasterMs += s.rasterMs;
+        total.shadowMs += s.shadowMs;
+        total.postMs += s.postMs;
         total.trianglesDrawn += s.trianglesDrawn;
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -204,6 +223,9 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, Thre
     std::printf("per frame    vertex %.2f ms, setup %.2f ms, raster %.2f ms, %.0f triangles drawn\n",
                 total.vertexMs / n, total.setupMs / n, total.rasterMs / n,
                 static_cast<double>(total.trianglesDrawn) / n);
+    if (total.shadowMs > 0.0 || total.postMs > 0.0)
+        std::printf("effects      shadow maps %.2f ms, post-processing %.2f ms\n", total.shadowMs / n,
+                    total.postMs / n);
     if (player)
         std::printf("animation    %s: pose + skinning %.2f ms per frame\n", player->clipName(player->clip()).c_str(),
                     poseMs / n);
@@ -257,6 +279,12 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    Environment environment;
+    if (std::string error; !loadEnvironmentOption(options, environment, error)) {
+        std::fprintf(stderr, "termesh: %s\n", error.c_str());
+        return 1;
+    }
+
     ThreadPool pool(static_cast<unsigned>(options.threads));
 
     // Animated models get a player, positioned where the options ask.
@@ -279,16 +307,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "termesh: warning: %s has no animations; --animation ignored\n", model.name.c_str());
     }
 
-    if (options.benchFrames > 0) return runBench(options, model, player, pool);
+    if (options.benchFrames > 0) return runBench(options, model, player, environment, pool);
     // --png and --gif can be combined: one run writes both.
     if (!options.pngPath.empty() || !options.gifPath.empty()) {
         int status = 0;
-        if (!options.pngPath.empty()) status = runPng(options, model, pool);
-        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, player, pool);
+        if (!options.pngPath.empty()) status = runPng(options, model, environment, pool);
+        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, player, environment, pool);
         return status;
     }
-    if (options.print) return runPrint(options, model, pool);
+    if (options.print) return runPrint(options, model, environment, pool);
 
-    Viewer viewer(options, model, player, pool);
+    Viewer viewer(options, model, player, environment, pool);
     return viewer.run();
 }

@@ -19,6 +19,12 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [9. Terminal output](#9-terminal-output)
 - [10. Input and the frame loop](#10-input-and-the-frame-loop)
 - [11. Animation](#11-animation)
+- [12. Lights and shading models](#12-lights-and-shading-models)
+- [13. HDR, blending and the two ways to finish a pixel](#13-hdr-blending-and-the-two-ways-to-finish-a-pixel)
+- [14. Shadow mapping](#14-shadow-mapping)
+- [15. Environment lighting and skyboxes](#15-environment-lighting-and-skyboxes)
+- [16. Post-processing](#16-post-processing)
+- [17. Dithering](#17-dithering)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -36,11 +42,12 @@ interpolation, the fill rule) carry long comments in the code itself.
             │  binning           which triangles touch which 32×32 tile      │
             │  rasterization     coverage ─► depth test ─► interpolate ─►    │  parallel
             │                    fragment shader ─► framebuffer              │
+            │  post-processing   sky · SSAO · outlines · bloom · tone map    │  parallel
             └────────────────────────────────────────────────────────────────┘
                           │
-                       resolve (average supersamples)
+                       resolve (average supersamples), FXAA
                           │
-              output backend (kitty · sixel · half-block · Braille · ASCII)
+              output backend (kitty · sixel · half-block · Braille · ASCII), dithering
                           │
                      your terminal
 ```
@@ -56,7 +63,8 @@ C++ operating on arrays of floats and bytes.
 | `src/core/`      | Framebuffer, images, textures (mipmaps, filtering), colour space, thread pool.   |
 | `src/scene/`     | `Model` / `Mesh` / `Material`, rig data, the orbit camera, OBJ and glTF loaders, demos. |
 | `src/anim/`      | Keyframe sampling, pose blending, skinning and morph targets, the timeline.      |
-| `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, lighting, resolve.         |
+| `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, shading models, shadows, resolve. |
+| `src/post/`      | Post-processing: sky, SSAO, outlines, bloom, tone mapping, FXAA.                 |
 | `src/raster/`    | The triangle and line rasterizer and the SIMD wrappers it uses.                  |
 | `src/output/`    | Terminal backends and the cell-diffing writer.                                   |
 | `src/input/`     | Raw terminal access (POSIX / Windows) and the input parser.                      |
@@ -331,18 +339,20 @@ into the pixel loop. For each visible pixel it:
 1. samples the base colour texture (trilinear, at the triangle's mip level)
    and discards the pixel if the material is an alpha cut-out below its
    threshold;
-2. in Phong mode, renormalises the interpolated normal, optionally perturbs
-   it with the normal map, and evaluates lighting; in Flat / Gouraud mode it
-   just reads the already-lit varyings;
-3. combines: `albedo·(1 − metallic)·diffuse + specularColour·specular + emissive`;
-4. tone-maps and encodes to sRGB.
+2. in the per-pixel modes (Phong, PBR, toon), renormalises the interpolated
+   normal, optionally perturbs it with the normal map, and evaluates
+   lighting; in Flat / Gouraud mode it just reads the already-lit varyings;
+3. adds the emissive colour;
+4. hands the result - linear HDR colour - to its output (see
+   [section 13](#13-hdr-blending-and-the-two-ways-to-finish-a-pixel)).
 
-**Lighting** is Blinn-Phong with a key light, a dim fill light and a
-hemisphere ambient term (sky colour from above, ground colour from below).
-glTF roughness is mapped to a specular exponent, and the highlight is
-energy-normalised so glossy surfaces get small bright highlights and rough
-ones wide dim ones. The lights are attached to the camera, which is why
-orbiting feels like turning the model in your hands.
+**Lighting** by default is Blinn-Phong with a key light, a dim fill light and
+a hemisphere ambient term (sky colour from above, ground colour from below).
+The lights are attached to the camera, which is why orbiting feels like
+turning the model in your hands. The other shading models, other lights,
+shadows and environments are covered in sections
+[12](#12-lights-and-shading-models) to
+[15](#15-environment-lighting-and-skyboxes).
 
 **Normal mapping** rebuilds the tangent frame per pixel: Gram-Schmidt the
 interpolated tangent against the normal, cross them for the bitangent (times
@@ -387,7 +397,7 @@ projection can compensate (an ASCII "pixel" is twice as tall as it is wide).
 | Backend    | Resolution per cell | How                                                              |
 | ---------- | ------------------- | ---------------------------------------------------------------- |
 | kitty      | real pixels         | RGB data, base64-encoded in chunked APC sequences                 |
-| sixel      | real pixels         | 6-pixel bands, one pass per colour, fixed palette + dithering    |
+| sixel      | real pixels         | 6-pixel bands, one pass per colour, fixed palette + [dithering](#17-dithering) |
 | half-block | 1 × 2               | `▀` with foreground = top pixel, background = bottom pixel        |
 | Braille    | 2 × 4 (monochrome)  | one of 256 dot patterns, U+2800 + bit per dot                    |
 | ASCII      | 1 × 1               | brightness → glyph from a ramp; colour carries the hue            |
@@ -575,6 +585,300 @@ pose, calls `applyPose` before rendering. Scrubbing (`,` `.`) pauses and seeks;
 `m` switches clips with a 0.3 s cross-fade. `--gif` on an animated model
 records exactly one loop of the clip so the GIF repeats seamlessly.
 
+## 12. Lights and shading models
+
+`src/scene/light.hpp` · `src/pipeline/shading.hpp`
+
+A `Light` is directional (the sun: parallel rays), point (a bulb) or spot (a
+bulb in a cone). For a surface point, each kind answers the same two
+questions - *which way is the light?* and *how much arrives?*:
+
+| Kind        | Direction to the light      | Brightness                                              |
+| ----------- | --------------------------- | ------------------------------------------------------- |
+| Directional | the same everywhere         | constant                                                |
+| Point       | towards its position        | `1 / distance²`, optionally faded to zero at a range    |
+| Spot        | towards its position        | the same, times a smooth falloff between two cone angles |
+
+Before a frame, `prepareLight` digests every light into a `ShadingLight`:
+colour times intensity, the cosines of the cone angles (so the per-pixel test
+is a comparison, not an `acos`), its shadow map. If the scene defines no
+lights, the renderer supplies the default rig: a key and a fill light attached
+to the camera.
+
+Three shading models consume those lights. They differ in the maths between
+"light arrives" and "colour leaves":
+
+### Blinn-Phong
+
+Used by flat, Gouraud and Phong shading (which differ only in *where* it is
+evaluated: per face, per vertex or per pixel). Diffuse light is Lambert's
+cosine law, `max(N·L, 0)`. The highlight is `(N·H)ˢ`, where `H` is the vector
+half-way between the light and the eye and the exponent `s` comes from the
+material's roughness; a factor of `(s + 8) / 8` keeps the highlight's total
+energy constant, so a glossy surface gets a small bright highlight and a rough
+one a wide dim one.
+
+### PBR: the microfacet model
+
+glTF materials are defined in terms of a physically based model, and `--shading
+pbr` implements it. The idea: a surface is a field of microscopic perfect
+mirrors, tilted at random. Light from `L` reaches the eye at `V` only off
+facets that face exactly half-way between the two, so the specular reflection
+is the product of three questions (Cook-Torrance):
+
+```
+              D · G · F             D   how many facets face H?           (GGX)
+specular = ───────────────          G   how many are not hidden behind
+            4 (N·L) (N·V)               their neighbours?                 (Smith)
+                                    F   how much does a facet reflect at
+                                        this angle?                       (Fresnel)
+```
+
+- **D** (`distributionGgx`) is controlled by roughness: small values give a
+  tall, narrow peak. A unit test integrates it over the hemisphere and checks
+  the result is 1 - facets cannot add up to more surface than there is.
+- **F** (`fresnelSchlick`) rises from `f0` face-on to 100% at a grazing angle.
+  `f0` is 4% for anything that is not a metal, and the base colour for metals.
+- What is not reflected enters the surface. In a non-metal it scatters and
+  re-emerges as the diffuse colour; in a metal it is absorbed, so metals have
+  no diffuse term at all. `metallic` blends between the two.
+
+Nothing in that can create light, which is why PBR materials hold up under any
+lighting without per-scene tweaking. (One known loss: light that bounces
+between facets more than once is ignored, so very rough metals come out a
+little dark. A unit test pins down how much.)
+
+### Toon
+
+Cel shading is Blinn-Phong with the smoothness removed: `N·L` is snapped to
+three flat tones and the highlight to on-or-off, each through a `softStep` a
+few hundredths wide so the boundaries are anti-aliased rather than jagged.
+Combined with [outlines](#16-post-processing) it gives the look of ink and
+flat paint.
+
+### A note on the inner loop
+
+`blinnPhong` is forced inline into the fragment shader and queues its `pow`
+calls for a tiny second loop; PBR and toon are kept *out* of line. Both
+decisions are about the same thing - the shader runs for every pixel, and the
+default path through it must stay small enough for the compiler to keep its
+working values in registers. The comments in `shading.hpp` have the details.
+
+## 13. HDR, blending and the two ways to finish a pixel
+
+`src/core/framebuffer.hpp` · `Renderer::render` in `src/pipeline/renderer.cpp`
+
+Shading produces **linear, unbounded** light values: a lamp can be a hundred
+times brighter than a white wall. A display cannot show that, so the last step
+of every frame is *tone mapping* - compressing the range into `[0, 1]` - and
+encoding as 8-bit sRGB.
+
+Where that step happens depends on what the frame needs:
+
+```
+                    ┌─ nothing translucent, no whole-frame effects ─► tone map each pixel as it
+ shaded colour ─────┤                                                 is shaded, straight into
+ (linear HDR)       │                                                 the 8-bit framebuffer
+                    └─ otherwise ─► float HDR buffer ─► post-processing ─► tone map ─► 8-bit
+```
+
+The float buffer costs four times the memory traffic, so frames that do not
+need it skip it; the fragment shader is a template over an `Output` type
+(`DirectOutput` or `HdrOutput`) and is compiled once for each route. A unit
+test renders the same scene down both and checks they agree.
+
+### Alpha blending
+
+A translucent surface cannot simply win or lose the depth test: what is behind
+it must show through. So triangles of `BLEND` materials are held back, sorted
+furthest-first, and drawn after everything opaque (the *painter's algorithm*).
+They are depth-*tested*, so opaque objects in front still hide them, but do not
+*write* depth, so the next layer can blend over them. Each one is combined with
+what is already in the pixel by the "over" operator,
+
+```
+colour   = source · α + destination · (1 − α)
+coverage = α + coverage · (1 − α)
+```
+
+in linear light - which is why any translucency sends the frame down the HDR
+route. Coverage is tracked the same way so the background can be mixed in at
+the very end by however much of the pixel is still uncovered. Sorting by
+triangle is not perfect (two intersecting translucent surfaces cannot be
+ordered), but it is right for the usual cases: glass in front of things.
+
+### Drawing several models
+
+The renderer takes a list of `DrawItem`s - a model and a transform. The vertex
+stage multiplies by the item's matrix (skipped when it is the identity),
+normals go through the inverse transpose, and a mirroring transform flips the
+sense of the back-face test. Materials from all the models are gathered into
+one table per frame so a triangle needs only a single index.
+
+## 14. Shadow mapping
+
+`src/pipeline/shadow.hpp` · `Renderer::renderShadowMap`
+
+A point is in shadow if something sits between it and the light. Rather than
+trace a ray per pixel, the scene is rendered once more **from the light**,
+keeping only depth. That image - the shadow map - records how far the light's
+rays travel in every direction before hitting something.
+
+```
+      light                    The map stores the depth of A. B projects to
+        \                      the same texel but is further from the light,
+         \   A  ← lit          so B is in shadow.
+          \  │
+           \ B  ← shadowed
+```
+
+The shadow pass reuses the whole pipeline with a depth-only shader, through an
+orthographic projection for a directional light and a perspective one matching
+the cone for a spot light. Then, for each shaded pixel, the world position is
+transformed into the light's clip space and its depth compared with the map's.
+
+Three details make it look right:
+
+- **Bias.** The map's texels are coarser than screen pixels, so a surface
+  compares against a slightly different depth than its own and shadows itself
+  in stripes ("acne"). The fix is to treat the point as a little nearer the
+  light: a slope-scaled offset when drawing the map plus a constant when
+  reading it. The constant is kept in world units and converted per sample,
+  because in a perspective map equal distances are *not* equal depth steps.
+- **Soft edges (PCF).** One comparison per pixel gives a hard, blocky edge.
+  *Percentage-closer filtering* makes the comparison at several neighbouring
+  texels and averages the **results** (averaging depths would be meaningless).
+  A box of `k × k` texels at the exact sub-texel position touches `(k + 1)²`
+  texels; the border ones are weighted by how much of them the box covers, so
+  the edge moves smoothly rather than in texel-sized steps. `--shadow-softness`
+  sets `k`.
+- **Fitting.** The map is aimed at the bounding sphere of the scene, so its
+  resolution is spent where there is something to shadow.
+
+Shadows are evaluated in the per-pixel modes only (Phong, PBR, toon); a shadow
+looked up once per vertex or face would be too coarse to recognise.
+
+## 15. Environment lighting and skyboxes
+
+`src/scene/environment.hpp` · `environment.cpp`
+
+Lights are points; the environment is everything else. A surface picks it up
+in two ways: a matte one averages all the light in the hemisphere it faces
+(*irradiance*), a shiny one mirrors a single direction, blurred by roughness.
+
+The default environment is two colours - sky above, ground below - blended by
+the normal's height. `--env` replaces it with an HDR panorama
+(equirectangular: longitude across, latitude down), or with one of the
+procedural skies built in. This is **image-based lighting**.
+
+**Diffuse.** Integrating the whole panorama for every pixel is out of the
+question. But irradiance varies so smoothly with the normal that nine
+*spherical harmonic* coefficients per channel - the sphere's equivalent of the
+first terms of a Fourier series - reproduce it to about 1%. They are computed
+once at load time (each texel weighted by the solid angle it covers, which
+shrinks towards the poles), and evaluating them is a nine-term polynomial in
+the normal. A unit test checks that a uniformly white panorama yields exactly
+white.
+
+**Specular.** A rough surface sees a blurred reflection. The panorama's mip
+chain already contains progressively blurred copies, so the lookup picks a
+level from the roughness (two levels per halving of roughness, since blur
+grows with its square). How much of that light is reflected comes from
+`environmentBrdf`, a curve fit to the usual precomputed lookup table. This is
+an approximation of proper prefiltering, chosen because it costs nothing to
+set up.
+
+**Skybox.** Every pixel is a ray from the eye. Where nothing was drawn, the
+ray's direction is looked up in the panorama. It is ordinary light - bright
+suns bloom, and it is tone mapped with everything else.
+
+## 16. Post-processing
+
+`src/post/`
+
+After rasterization there are two images: HDR colour and depth. Each pass
+reads those and rewrites the colour.
+
+### Rebuilding geometry from depth
+
+Several passes need the position and normal of each pixel. Neither is stored:
+both are recovered from depth. Position is the projection run backwards.
+The normal is the cross product of the position's change across the screen -
+taking care at edges, where a neighbour may belong to a different surface, to
+use the side on which the surface continues in a straight line. "Straight" is
+judged on `1/z`, which (as in perspective-correct interpolation) is what
+varies linearly across the screen for a flat surface.
+
+### SSAO
+
+Ambient light arrives from all around, so the bottom of a crease gets less of
+it than open ground. Screen-space ambient occlusion estimates that from depth
+alone: scatter a few sample points in the hemisphere above the surface,
+project each back to the screen, and ask the depth buffer whether something
+nearer the camera was drawn there. The fraction of samples buried in geometry
+is the occlusion. Eight samples would be noisy, so each pixel rotates the
+pattern by an angle from a repeating 4×4 table, and a 4×4 blur afterwards
+averages exactly one table's worth.
+
+### Outlines
+
+A line is drawn wherever, between a pixel and its neighbour, coverage changes
+(the silhouette), depth jumps (one object in front of another) or the normal
+turns sharply (a crease). Depth is tested by the *second* difference of `1/z`,
+which is zero across any flat surface however steeply it recedes, so a floor
+seen at a glancing angle is not inked all over.
+
+### Bloom
+
+A lens scatters a little light from a very bright source over its
+surroundings. Bloom keeps only what exceeds a threshold, blurs it, and adds it
+back. The blur is done by halving the image repeatedly - each halving doubles
+the reach of a small filter - then adding the levels back together, smallest
+first.
+
+### Tone mapping
+
+Four curves: ACES (the default; contrasty), Reinhard (`x / (1 + x)`), Hable's
+filmic curve and plain clamping. Exposure, in photographic stops, scales the
+light first. A flat background colour is added *after* the curve so that it
+comes out exactly as specified.
+
+### FXAA
+
+Supersampling fixes aliasing by brute force. FXAA is the cheap alternative for
+the pixel backends, applied to the finished image: find pixels on a
+high-contrast edge, work out which way the edge runs from the neighbours'
+brightness, and blur *along* it only.
+
+## 17. Dithering
+
+`src/output/dither.hpp`
+
+Most output modes cannot show the colour that was computed: sixel has a
+253-colour palette, a 256-colour terminal a fixed cube, ASCII a dozen glyph
+densities, Braille two states per dot. Rounding to the nearest available value
+turns gradients into bands. Dithering trades the bands for fine noise by
+rounding neighbouring pixels in different directions, so their *average* is
+right.
+
+| Method          | How                                                              | Good for  |
+| --------------- | ---------------------------------------------------------------- | --------- |
+| Ordered         | add a position-dependent threshold (a 4×4 Bayer matrix) first    | animation: the pattern holds still |
+| Floyd-Steinberg | push each pixel's rounding error onto its unvisited neighbours   | stills: sharper, but the noise crawls when things move |
+
+`--dither auto` picks per backend:
+
+| Backend    | Auto                                                                       |
+| ---------- | -------------------------------------------------------------------------- |
+| kitty      | none - 24-bit pixels                                                       |
+| sixel      | ordered while animating, Floyd-Steinberg for `--print`                     |
+| half-block | the same, on 256-colour terminals only                                     |
+| ASCII      | none - twelve glyphs are too few for noise to read as shade (opt in)       |
+| Braille    | none - dots mark the wireframe. Asking for a dither mode changes the job: shaded surfaces as a one-bit halftone |
+
+Background pixels never take part, so the empty area around a model stays
+perfectly flat.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle
@@ -587,7 +891,14 @@ records exactly one loop of the clip so the GIF repeats seamlessly.
 - **No per-frame allocation.** Clip vertices, triangle lists and tile bins
   are kept between frames.
 - **SIMD is used where it pays**: coverage and depth rejection, which run for
-  every pixel in every bounding box. Shading stays scalar and readable.
+  every pixel in every bounding box. Shading stays scalar and readable - and
+  on GCC the auto-vectoriser is told to leave the fragment shader alone
+  (`-fno-tree-slp-vectorize` for `renderer.cpp`): packing pairs of a
+  three-component vector into SSE registers costs more in shuffles than it
+  saves, about 10% of the frame.
+- **Features cost nothing until used.** A frame without translucency or
+  whole-frame effects never touches the HDR buffer; shadow maps are only
+  drawn for lights that cast them; the two-colour environment is inlined.
 - **The terminal is usually the bottleneck**, which is what the cell diffing
   and the pixel budget on the kitty / sixel backends are for.
 
@@ -608,8 +919,20 @@ records exactly one loop of the clip so the GIF repeats seamlessly.
   and morph targets against hand-computed positions, the timeline (looping,
   reverse, seeking, cross-fades), and skinned / morphed glTF files built by
   the test.
+- `test_render.cpp` - light falloff and cones, the PBR terms (GGX integrates
+  to one, Fresnel limits, energy bounds), shadow comparison / bias / soft
+  edges, shadows cast in real scenes by directional and spot lights, alpha
+  blending against hand-computed colours and in any submission order, the
+  direct and HDR routes agreeing, and draw lists with transforms.
+- `test_post.cpp` - every tone curve monotonic and bounded, bloom spreading
+  only what exceeds the threshold, SSAO darkening a pit but not a flat wall,
+  outlines on silhouettes / depth steps but not on steep planes, FXAA
+  leaving straight edges alone, and environments: spherical-harmonic
+  irradiance, roughness blur, rotation, `.hdr` loading, bad input.
 - `test_output.cpp` - cell diffing, each backend's encoding (the kitty and GIF
-  streams are decoded again and compared), palette quantisation.
+  streams are decoded again and compared), palette quantisation, and
+  dithering: averages preserved, backgrounds untouched, each backend's
+  behaviour in each mode.
 - `test_input.cpp` - the input parser, including sequences split across reads.
 
 CI builds and runs all of it on Linux (GCC, Clang, and with SIMD disabled),

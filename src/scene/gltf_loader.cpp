@@ -299,12 +299,7 @@ struct GltfContext {
                 m.alphaMode = AlphaMode::Mask;
                 m.alphaCutoff = src.alpha_cutoff;
             } else if (src.alpha_mode == cgltf_alpha_mode_blend) {
-                // There is no blending in this renderer. Treat translucent
-                // materials as cut-outs that only drop (nearly) invisible
-                // texels, so glass stays visible and decals keep their shape.
-                m.alphaMode = AlphaMode::Mask;
-                m.alphaCutoff = 0.1f;
-                m.baseColor.w = std::max(m.baseColor.w, 0.11f);
+                m.alphaMode = AlphaMode::Blend;
             }
             result.model.materials.push_back(std::move(m));
         }

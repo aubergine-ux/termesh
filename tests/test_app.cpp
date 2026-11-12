@@ -184,3 +184,84 @@ TEST_CASE("options: animation controls") {
     CHECK_FALSE(parse({"fox.glb", "--anim-speed", "nan"}).ok);
     CHECK_FALSE(parse({"fox.glb", "--anim-speed", "1000"}).ok);
 }
+
+TEST_CASE("options: lighting and effects") {
+    const ParseResult r = parse({"m.glb",
+                                 "-s",
+                                 "pbr",
+                                 "--shadows",
+                                 "--shadow-size",
+                                 "512",
+                                 "--shadow-softness=5",
+                                 "--env",
+                                 "sky",
+                                 "--sky-blur",
+                                 "0.5",
+                                 "--env-intensity",
+                                 "2",
+                                 "--env-rotation",
+                                 "90",
+                                 "--ssao",
+                                 "--bloom",
+                                 "--fxaa",
+                                 "--tonemap",
+                                 "filmic",
+                                 "--exposure",
+                                 "-1.5",
+                                 "--light-angle",
+                                 "45",
+                                 "--dither",
+                                 "fs"});
+    REQUIRE_MESSAGE(r.ok, r.error);
+    const Options& o = r.options;
+    CHECK(o.shading == ShadingMode::Pbr);
+    CHECK(o.shadows);
+    CHECK(o.shadowMapSize == 512);
+    CHECK(o.shadowSoftness == 5);
+    CHECK(o.environment == "sky");
+    CHECK(o.dither == DitherMode::FloydSteinberg);
+    CHECK(o.lightAngle == doctest::Approx(45.0f));
+
+    const RenderSettings settings = makeRenderSettings(o);
+    CHECK(settings.shading == ShadingMode::Pbr);
+    CHECK(settings.shadows);
+    CHECK(settings.shadowMapSize == 512);
+    CHECK(settings.skyboxBlur == doctest::Approx(0.5f));
+    CHECK(settings.post.ssao);
+    CHECK(settings.post.bloom);
+    CHECK(settings.post.fxaa);
+    CHECK_FALSE(settings.post.outline);
+    CHECK(settings.post.toneMapper == ToneMapper::Filmic);
+    CHECK(settings.post.exposure == doctest::Approx(-1.5f));
+
+    Environment environment;
+    std::string error;
+    REQUIRE(loadEnvironmentOption(o, environment, error));
+    CHECK(environment.name == "sky");
+    CHECK(environment.intensity == doctest::Approx(2.0f));
+    CHECK(environment.rotation == doctest::Approx(radians(90.0f)));
+    // A panorama is shown as the background unless told otherwise.
+    CHECK(wantsSkybox(o, environment));
+    CHECK_FALSE(wantsSkybox(parse({"m.glb", "--env", "sky", "--no-skybox"}).options, environment));
+    CHECK_FALSE(wantsSkybox(parse({"m.glb"}).options, Environment()));
+    CHECK(wantsSkybox(parse({"m.glb", "--skybox"}).options, Environment()));
+
+    // Toon shading brings outlines with it, unless they are declined.
+    CHECK(makeRenderSettings(parse({"m.glb", "-s", "toon"}).options).post.outline);
+    CHECK_FALSE(makeRenderSettings(parse({"m.glb", "-s", "toon", "--no-outline"}).options).post.outline);
+    CHECK(makeRenderSettings(parse({"m.glb", "--outline"}).options).post.outline);
+
+    Options missing = o;
+    missing.environment = "/no/such/file.hdr";
+    CHECK_FALSE(loadEnvironmentOption(missing, environment, error));
+    CHECK_FALSE(error.empty());
+
+    CHECK_FALSE(parse({"m.glb", "--shadow-size", "8"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--shadow-softness", "0"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--sky-blur", "2"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--tonemap", "sepia"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--exposure", "lots"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--dither", "sparkly"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--env"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--env-intensity", "-1"}).ok);
+}

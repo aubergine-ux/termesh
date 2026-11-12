@@ -164,7 +164,8 @@ private:
 //     ESC-backslash           end
 //
 // The palette is limited (256 entries at most), so the image is reduced to a
-// fixed 6x7x6 colour cube with ordered dithering first.
+// fixed 6x7x6 colour cube first, with dithering to hide the steps: ordered
+// while animating, Floyd-Steinberg for a single printed frame.
 class SixelBackend final : public Backend {
 public:
     BackendKind kind() const override { return BackendKind::Sixel; }
@@ -186,11 +187,11 @@ public:
 
     void present(ImageView image, std::string& out) override {
         out += "\x1b[H";
-        encode(image, out);
+        encode(image, out, false);
     }
 
     void print(ImageView image, std::string& out) override {
-        encode(image, out);
+        encode(image, out, true);
         out += '\n';
     }
 
@@ -215,9 +216,24 @@ private:
         return std::min(scaled / (255 * 16), levels - 1);
     }
 
-    void encode(ImageView image, std::string& out) {
+    void encode(ImageView image, std::string& out, bool still) {
         static constexpr int bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
         const int width = image.width, height = image.height;
+
+        const DitherMode mode = resolveDither(dither_, still);
+        if (mode == DitherMode::FloydSteinberg) {
+            // Error diffusion needs to know the colour each pixel actually
+            // got, so it runs as a pass of its own; what it leaves behind
+            // is already on the cube and only needs converting to indices.
+            auto toCube = [](Color8 c) {
+                auto snap = [](int value, int levels) {
+                    return static_cast<std::uint8_t>(quantize(value, levels, 8) * 255 / (levels - 1));
+                };
+                return Color8{snap(c.r, kRedLevels), snap(c.g, kGreenLevels), snap(c.b, kBlueLevels), c.a};
+            };
+            ditherImage(image, mode, 0.0f, toCube, dithered_);
+            image = dithered_.view();
+        }
 
         // Pass 1: reduce every pixel to a palette index.
         indices_.resize(static_cast<std::size_t>(width) * height);
@@ -231,7 +247,8 @@ private:
                     dst[x] = static_cast<std::uint8_t>(kBackgroundIndex);
                     continue;
                 }
-                const int t = bayer[y & 3][x & 3];
+                // A threshold of 8 is plain rounding to the nearest level.
+                const int t = mode == DitherMode::Ordered ? bayer[y & 3][x & 3] : 8;
                 const int r = quantize(row[x].r, kRedLevels, t);
                 const int g = quantize(row[x].g, kGreenLevels, t);
                 const int b = quantize(row[x].b, kBlueLevels, t);
@@ -320,6 +337,7 @@ private:
 
     int zoom_ = 1;
     std::vector<std::uint8_t> indices_;
+    Image dithered_;
     std::vector<std::uint8_t> columns_;
 };
 

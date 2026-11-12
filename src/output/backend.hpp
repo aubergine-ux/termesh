@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "core/image.hpp"
+#include "output/dither.hpp"
 
 namespace termesh {
 
@@ -76,6 +77,25 @@ public:
     // Append whatever is needed to remove the backend's output from the
     // screen (kitty images are separate objects that outlive a text clear).
     virtual void cleanup(std::string& out) { (void)out; }
+
+    // How to hide the backend's limited range of colours (see dither.hpp).
+    // Auto picks what suits the backend:
+    //
+    //   kitty      nothing to hide: 24-bit pixels
+    //   sixel      ordered while animating, Floyd-Steinberg for a still
+    //   halfblock  the same, but only on 256-colour terminals
+    //   ascii      none: twelve glyphs are too few for noise to read as shade
+    //   braille    none: dots mark where the wireframe is. Asking for ordered
+    //              or Floyd-Steinberg switches Braille to a different job:
+    //              shaded surfaces as a halftone, one dot per pixel
+    void setDither(DitherMode mode) {
+        dither_ = mode;
+        invalidate();
+    }
+    DitherMode dither() const { return dither_; }
+
+protected:
+    DitherMode dither_ = DitherMode::Auto;
 };
 
 std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color);

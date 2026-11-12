@@ -28,6 +28,17 @@ int nearestXterm256(Color8 c) {
     return greyDist < cubeDist ? 232 + grey : 16 + 36 * r + 6 * g + b;
 }
 
+Color8 xterm256Color(int index) {
+    static constexpr int levels[6] = {0, 95, 135, 175, 215, 255};
+    if (index >= 232) {
+        const auto grey = static_cast<std::uint8_t>(8 + (std::min(index, 255) - 232) * 10);
+        return {grey, grey, grey, 255};
+    }
+    const int cube = std::max(index - 16, 0);
+    return {static_cast<std::uint8_t>(levels[cube / 36]), static_cast<std::uint8_t>(levels[cube / 6 % 6]),
+            static_cast<std::uint8_t>(levels[cube % 6]), 255};
+}
+
 std::uint32_t packColor(Color8 c, ColorDepth depth) {
     switch (depth) {
         case ColorDepth::TrueColor:

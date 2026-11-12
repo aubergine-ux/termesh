@@ -60,6 +60,12 @@ jobs:
           "$bin" --demo tentacle --animation curl --anim-time 1.5 --png tentacle.png --size 320x240
           "$bin" --demo tentacle --gif tentacle.gif --size 160x120 --gif-fps 10
           "$bin" --demo tentacle --bench 50
+          "$bin" --demo knot -s pbr --env sky --shadows --ssao --bloom --fxaa --png pbr.png --size 480x360
+          "$bin" --demo cube -s toon --tonemap filmic --exposure 0.5 --png toon.png --size 320x240
+          "$bin" --demo knot -s pbr --env sunset --shadows --bench 30
+          "$bin" --demo knot --print --backend braille --dither ordered --color none --cols 60 --rows 20
+          "$bin" --demo sphere --print --backend halfblock --color 256 --dither fs --cols 40 --rows 12
+          test -s pbr.png && test -s toon.png
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
 
   sanitizers:
@@ -82,3 +88,8 @@ jobs:
           build/termesh --demo tentacle --animation wave --gif tentacle.gif --size 160x120 --frames 8
           build/termesh --demo knot --print --backend sixel --cols 40 --rows 12 > /dev/null
           build/termesh --demo knot --print --backend braille --cols 40 --rows 12 > /dev/null
+          build/termesh --demo knot -s pbr --env sky --shadows --ssao --bloom --outline --fxaa --png fx.png --size 320x240
+          build/termesh --demo cube -s toon --shadows --light-angle 60 --png toon.png --size 200x150
+          build/termesh --demo knot --print --backend sixel --dither fs --cols 30 --rows 10 > /dev/null
+          build/termesh --demo knot --print --backend braille --dither fs --cols 30 --rows 10 > /dev/null
+          build/termesh --demo sphere --print --backend ascii --dither ordered --color 256 --cols 30 --rows 10 > /dev/null

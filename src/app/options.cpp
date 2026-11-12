@@ -26,7 +26,9 @@ std::string usageText() {
                        "Display:\n"
                        "  -b, --backend <name>   kitty, sixel, halfblock, braille or ascii (default: best available)\n"
                        "      --color <depth>    truecolor, 256 or none (default: detect)\n"
-                       "  -s, --shading <mode>   flat, gouraud or phong (default: phong)\n"
+                       "      --dither <mode>    auto, none, ordered or fs (Floyd-Steinberg); with braille,\n"
+                       "                         ordered / fs draw shaded surfaces as a halftone\n"
+                       "  -s, --shading <mode>   flat, gouraud, phong, pbr or toon (default: phong)\n"
                        "  -w, --wireframe        start in wireframe mode\n"
                        "      --no-textures      ignore textures\n"
                        "      --no-normal-maps   ignore normal maps\n"
@@ -36,6 +38,22 @@ std::string usageText() {
                        "      --threads <n>      worker threads (default: all cores)\n"
                        "      --fps <n>          frame rate limit (default: 60)\n"
                        "      --no-stats         hide the status bar\n"
+                       "\n"
+                       "Lighting and effects:\n"
+                       "      --light-angle <d>  turn the key light about the vertical axis (default: 0)\n"
+                       "      --shadows          cast shadows from the key light\n"
+                       "      --shadow-size <n>  shadow map resolution, 64-2048 (default: 1024)\n"
+                       "      --shadow-softness <n>  width of the shadow edge, 1 (hard) to 7 (default: 3)\n"
+                       "      --env <name|file>  environment lighting: studio, sky, sunset, or an .hdr panorama\n"
+                       "      --skybox, --no-skybox   draw the environment as the background, or do not\n"
+                       "      --sky-blur <0-1>   blur the background\n"
+                       "      --env-intensity <x>, --env-rotation <deg>   brightness and turn of the environment\n"
+                       "      --ssao             ambient occlusion: darken creases and corners\n"
+                       "      --bloom            glow around very bright areas\n"
+                       "      --outline, --no-outline   ink outlines (on by default with toon shading)\n"
+                       "      --fxaa             fast approximate anti-aliasing of the final image\n"
+                       "      --tonemap <curve>  aces, reinhard, filmic or linear (default: aces)\n"
+                       "      --exposure <stops> brighten (+) or darken (-) before tone mapping\n"
                        "\n"
                        "Camera:\n"
                        "      --yaw <deg>        initial rotation around the vertical axis\n"
@@ -72,7 +90,7 @@ std::string usageText() {
            "  -V, --version          show the version\n"
            "\n"
            "Keys:\n"
-           "  drag / arrows / hjkl   orbit            1 2 3 / s   flat, gouraud, phong / cycle\n"
+           "  drag / arrows / hjkl   orbit            1-5 / s     flat, gouraud, phong, pbr, toon / cycle\n"
            "  right-drag / HJKL      pan              w           wireframe\n"
            "  wheel / + -            zoom             t  n        textures, normal maps\n"
            "  space                  auto-rotate      c           back-face culling\n"
@@ -81,7 +99,12 @@ std::string usageText() {
            "  p                      save a PNG       ?  q        help, quit\n"
            "\n"
            "  a                      play / pause the animation      m  M   next / previous animation\n"
-           "  ,  .                   step back / forward             <  >   slower / faster\n";
+           "  ,  .                   step back / forward             <  >   slower / faster\n"
+           "\n"
+           "  x                      shadows          e  y        next environment, sky background\n"
+           "  u  g  i  f             ambient occlusion, bloom (glow), ink outlines, FXAA\n"
+           "  z                      next tone curve  {  }        exposure down / up\n"
+           "  d                      next dithering mode\n";
 }
 
 RenderSettings makeRenderSettings(const Options& options) {
@@ -92,7 +115,30 @@ RenderSettings makeRenderSettings(const Options& options) {
     settings.normalMaps = options.normalMaps;
     settings.cullBackfaces = options.cullBackfaces;
     settings.background = options.background;
+    settings.shadows = options.shadows;
+    settings.shadowMapSize = options.shadowMapSize;
+    settings.shadowSoftness = options.shadowSoftness;
+    settings.skyboxBlur = options.skyBlur;
+    settings.post.ssao = options.ssao;
+    settings.post.bloom = options.bloom;
+    settings.post.fxaa = options.fxaa;
+    settings.post.outline = options.outline.value_or(options.shading == ShadingMode::Toon);
+    settings.post.toneMapper = options.toneMapper;
+    settings.post.exposure = options.exposure;
     return settings;
+}
+
+bool loadEnvironmentOption(const Options& options, Environment& out, std::string& error) {
+    const std::string& name = options.environment;
+    if (name.empty()) out = Environment();
+    else if (!makeBuiltinEnvironment(name, out) && !loadEnvironment(name, out, error)) return false;
+    out.intensity = options.envIntensity;
+    out.rotation = radians(options.envRotation);
+    return true;
+}
+
+bool wantsSkybox(const Options& options, const Environment& environment) {
+    return options.skybox.value_or(environment.hasMap());
 }
 
 OrbitCamera makeCamera(const Options& options, const Model& model) {
@@ -221,6 +267,14 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         else if (name == "--no-stats") o.stats = false;
         else if (name == "--spin") o.spin = o.spinExplicit = true;
         else if (name == "--paused") o.animationPaused = true;
+        else if (name == "--shadows") o.shadows = true;
+        else if (name == "--skybox") o.skybox = true;
+        else if (name == "--no-skybox") o.skybox = false;
+        else if (name == "--ssao") o.ssao = true;
+        else if (name == "--bloom") o.bloom = true;
+        else if (name == "--fxaa") o.fxaa = true;
+        else if (name == "--outline") o.outline = true;
+        else if (name == "--no-outline") o.outline = false;
         else if (name == "--list-animations") o.listAnimations = true;
         else if (name == "--no-spin") o.spin = false;
         else if (name == "--print") o.print = true;
@@ -239,11 +293,18 @@ ParseResult parseOptions(int argc, const char* const* argv) {
             else if (value == "256") o.color = ColorDepth::Indexed256;
             else if (value == "none" || value == "mono") o.color = ColorDepth::None;
             else if (value != "auto") return invalid();
+        } else if (name == "--dither") {
+            if (!needValue()) return missing();
+            const auto mode = ditherModeFromName(value);
+            if (!mode) return invalid();
+            o.dither = *mode;
         } else if (name == "-s" || name == "--shading") {
             if (!needValue()) return missing();
             if (value == "flat") o.shading = ShadingMode::Flat;
             else if (value == "gouraud") o.shading = ShadingMode::Gouraud;
             else if (value == "phong") o.shading = ShadingMode::Phong;
+            else if (value == "pbr") o.shading = ShadingMode::Pbr;
+            else if (value == "toon") o.shading = ShadingMode::Toon;
             else return invalid();
         } else if (name == "--bg") {
             if (!needValue()) return missing();
@@ -276,6 +337,39 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--spin-speed") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.spinSpeed)) return invalid();
+        } else if (name == "--light-angle") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.lightAngle)) return invalid();
+        } else if (name == "--shadow-size") {
+            if (!needValue()) return missing();
+            if (!intOption(o.shadowMapSize, 64, 2048)) return invalid();
+        } else if (name == "--shadow-softness") {
+            if (!needValue()) return missing();
+            if (!intOption(o.shadowSoftness, 1, 7)) return invalid();
+        } else if (name == "--env") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.environment = std::string(value);
+        } else if (name == "--sky-blur") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.skyBlur) || o.skyBlur < 0.0f || o.skyBlur > 1.0f) return invalid();
+        } else if (name == "--env-intensity") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.envIntensity) || o.envIntensity < 0.0f || o.envIntensity > 1000.0f)
+                return invalid();
+        } else if (name == "--env-rotation") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.envRotation)) return invalid();
+        } else if (name == "--tonemap") {
+            if (!needValue()) return missing();
+            if (value == "aces") o.toneMapper = ToneMapper::Aces;
+            else if (value == "reinhard") o.toneMapper = ToneMapper::Reinhard;
+            else if (value == "filmic") o.toneMapper = ToneMapper::Filmic;
+            else if (value == "linear" || value == "none") o.toneMapper = ToneMapper::Linear;
+            else return invalid();
+        } else if (name == "--exposure") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.exposure) || std::abs(o.exposure) > 16.0f) return invalid();
         } else if (name == "--animation") {
             if (!needValue()) return missing();
             if (value.empty()) return invalid();

@@ -37,11 +37,14 @@ struct RasterTriangle {
     float z[3];               // depth in [0, 1], 0 = near plane
     float invW[3];            // 1 / clip-space w, for perspective correction
     float varyings[3][kMaxVaryings];
-    float lod;          // texture level-of-detail bias for the whole triangle
-    float tangentSign;  // handedness of the tangent frame (+1 / -1)
-    std::uint16_t material;
-    std::uint8_t edgeMask;  // bit i set: the edge opposite vertex i is a real mesh edge
+    float lod;               // texture level-of-detail bias for the whole triangle
+    float tangentSign;       // handedness of the tangent frame (+1 / -1)
+    std::uint32_t material;  // index into the renderer's per-frame material table
+    std::uint8_t edgeMask;   // bit i set: the edge opposite vertex i is a real mesh edge
     bool backFacing;
+    // Translucent: depth-tested against what is already there, but leaves the
+    // depth buffer alone, so that surfaces behind it can still be blended in.
+    bool blend = false;
 };
 
 // What the fragment shader receives for one pixel.
@@ -80,10 +83,15 @@ constexpr bool isTopLeftEdge(std::int32_t ax, std::int32_t ay, std::int32_t bx, 
 // Shader requirements:
 //     int   varyingCount() const;        how many varyings to interpolate
 //     float depthSlopeBias() const;      0 normally; see "polygon offset" below
-//     bool  operator()(const RasterTriangle&, const Fragment&, Color8& out) const;
-//                                         return false to discard the pixel
-template <typename Shader>
-void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles, std::size_t count,
+//     bool  operator()(const RasterTriangle&, const Fragment&, Pixel& out) const;
+//                                         `out` arrives holding the colour
+//                                         already in the framebuffer, for
+//                                         shaders that blend; return false
+//                                         to discard the pixel
+//
+// Target is any BasicFramebuffer; Pixel is its colour type.
+template <typename Target, typename Shader>
+void rasterizeTile(Target& fb, const TileRect& tile, const RasterTriangle* const* triangles, std::size_t count,
                    const Shader& shader) {
     using simd::Float4;
     using simd::Int4;
@@ -181,7 +189,7 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
         const Float4 unbias2 = Float4::splat(static_cast<float>(bias[2]));
 
         for (int y = minY; y <= maxY; ++y) {
-            Color8* colorRow = fb.colorRow(y);
+            typename Target::Pixel* colorRow = fb.colorRow(y);
             float* depthRow = fb.depthRow(y);
             std::int64_t e0 = rowStart[0], e1 = rowStart[1], e2 = rowStart[2];
 
@@ -264,9 +272,9 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
                     for (int k = 0; k < varyingCount; ++k)
                         frag.varyings[k] = b0 * tri.varyings[0][k] + b1 * tri.varyings[1][k] + b2 * tri.varyings[2][k];
 
-                    Color8 color;
+                    typename Target::Pixel color = colorRow[x + lane];
                     if (!shader(tri, frag, color)) continue;  // discarded (alpha cut-out)
-                    depthRow[x + lane] = depth[lane];
+                    if (!tri.blend) depthRow[x + lane] = depth[lane];
                     colorRow[x + lane] = color;
                 }
             }
@@ -286,10 +294,10 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
 // drawn, which leaves out the diagonals introduced by clipping.
 //
 // Shader requirement, in addition to those of rasterizeTile:
-//     bool shadeEdge(const RasterTriangle&, const Fragment&, Color8& out) const;
-template <typename Shader>
-void rasterizeTileEdges(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles,
-                        std::size_t count, const Shader& shader, int lineWidth) {
+//     bool shadeEdge(const RasterTriangle&, const Fragment&, Pixel& out) const;
+template <typename Target, typename Shader>
+void rasterizeTileEdges(Target& fb, const TileRect& tile, const RasterTriangle* const* triangles, std::size_t count,
+                        const Shader& shader, int lineWidth) {
     const int varyingCount = shader.varyingCount();
     const float toPixels = 1.0f / static_cast<float>(kSubpixelScale);
     // A line of width w covers offsets [-(w-1)/2, w/2] across its direction.
@@ -330,7 +338,7 @@ void rasterizeTileEdges(Framebuffer& fb, const TileRect& tile, const RasterTrian
                 const float z = tri.z[a] + s * (tri.z[b] - tri.z[a]);
 
                 bool shaded = false;
-                Color8 color;
+                typename Target::Pixel color{};
                 for (int offset = offsetLo; offset <= offsetHi; ++offset) {
                     const int n = centre + offset;
                     if (n < minorLo || n > minorHi) continue;

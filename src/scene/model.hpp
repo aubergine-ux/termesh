@@ -21,7 +21,11 @@ struct Vertex {
     Vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
 };
 
-enum class AlphaMode { Opaque, Mask };
+enum class AlphaMode {
+    Opaque,  // alpha is ignored
+    Mask,    // a cut-out: pixels below alphaCutoff are not drawn at all
+    Blend,   // translucent: mixed with whatever is behind
+};
 
 struct Material {
     std::string name;

@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <cmath>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -9,6 +11,7 @@
 #include "export/gif.hpp"
 #include "output/backends.hpp"
 #include "output/cell_grid.hpp"
+#include "output/dither.hpp"
 
 using namespace termesh;
 
@@ -349,4 +352,249 @@ TEST_CASE("gif: the palette reproduces a small set of colours closely") {
         CHECK(std::abs(q.g - c.g) <= 8);
         CHECK(std::abs(q.b - c.b) <= 8);
     }
+}
+
+// --------------------------------------------------------------- dithering ---
+
+namespace {
+
+// Round each channel to pure black or pure white.
+Color8 blackOrWhite(Color8 c) {
+    auto snap = [](std::uint8_t v) { return static_cast<std::uint8_t>(v < 128 ? 0 : 255); };
+    return {snap(c.r), snap(c.g), snap(c.b), c.a};
+}
+
+double meanRed(const Image& image) {
+    double sum = 0.0;
+    for (const Color8& p : image.pixels) sum += p.r;
+    return sum / static_cast<double>(image.pixels.size());
+}
+
+}  // namespace
+
+TEST_CASE("dither: names") {
+    CHECK(ditherModeFromName("auto") == DitherMode::Auto);
+    CHECK(ditherModeFromName("none") == DitherMode::None);
+    CHECK(ditherModeFromName("ordered") == DitherMode::Ordered);
+    CHECK(ditherModeFromName("fs") == DitherMode::FloydSteinberg);
+    CHECK(ditherModeFromName("floyd-steinberg") == DitherMode::FloydSteinberg);
+    CHECK_FALSE(ditherModeFromName("sparkly").has_value());
+    for (DitherMode mode : {DitherMode::Auto, DitherMode::None, DitherMode::Ordered, DitherMode::FloydSteinberg})
+        CHECK(ditherModeFromName(ditherModeName(mode)) == mode);
+
+    // Auto: stable noise for animation, error diffusion for a still.
+    CHECK(resolveDither(DitherMode::Auto, false) == DitherMode::Ordered);
+    CHECK(resolveDither(DitherMode::Auto, true) == DitherMode::FloydSteinberg);
+    CHECK(resolveDither(DitherMode::None, true) == DitherMode::None);
+}
+
+TEST_CASE("dither: the Bayer thresholds are balanced") {
+    float sum = 0.0f;
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            const float t = bayerThreshold(x, y);
+            CHECK(t > -0.5f);
+            CHECK(t < 0.5f);
+            sum += t;
+        }
+    CHECK(sum == doctest::Approx(0.0f).scale(1.0));
+    CHECK(bayerThreshold(5, 6) == bayerThreshold(1, 2));  // repeats every four pixels
+}
+
+TEST_CASE("dither: the average brightness survives a reduction to two colours") {
+    for (int grey : {40, 100, 128, 200}) {
+        const Image source = solid(
+            64, 64,
+            {static_cast<std::uint8_t>(grey), static_cast<std::uint8_t>(grey), static_cast<std::uint8_t>(grey), 255});
+        Image none, ordered, diffused;
+        ditherImage(source.view(), DitherMode::None, 255.0f, blackOrWhite, none);
+        ditherImage(source.view(), DitherMode::Ordered, 255.0f, blackOrWhite, ordered);
+        ditherImage(source.view(), DitherMode::FloydSteinberg, 255.0f, blackOrWhite, diffused);
+        CAPTURE(grey);
+        // Plain rounding turns the whole image black or white...
+        CHECK((meanRed(none) == 0.0 || meanRed(none) == 255.0));
+        // ...dithering keeps its average: a 4x4 pattern has 17 levels, error
+        // diffusion is exact to within the error still in flight.
+        CHECK(std::abs(meanRed(ordered) - grey) <= 255.0 / 16.0 / 2.0 + 0.5);
+        CHECK(std::abs(meanRed(diffused) - grey) <= 3.0);
+        for (const Color8& p : diffused.pixels) REQUIRE((p.r == 0 || p.r == 255));
+    }
+}
+
+TEST_CASE("dither: representable colours and the background pass through unchanged") {
+    Image source(8, 8);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) {
+            if (x < 4) source.row(y)[x] = {255, 0, 255, 255};  // already black-or-white per channel
+            else source.row(y)[x] = {17, 99, 201, 0};          // background: alpha 0
+        }
+    for (DitherMode mode : {DitherMode::None, DitherMode::FloydSteinberg}) {
+        Image out;
+        ditherImage(source.view(), mode, 255.0f, blackOrWhite, out);
+        CHECK(out.pixels == source.pixels);
+    }
+    // Ordered dithering is a function of position alone: the same every time.
+    const Image grey = solid(16, 16, {77, 77, 77, 255});
+    Image a, b;
+    ditherImage(grey.view(), DitherMode::Ordered, 255.0f, blackOrWhite, a);
+    ditherImage(grey.view(), DitherMode::Ordered, 255.0f, blackOrWhite, b);
+    CHECK(a.pixels == b.pixels);
+}
+
+TEST_CASE("dither: single-channel levels") {
+    const int width = 32, height = 32;
+    std::vector<float> values(static_cast<std::size_t>(width) * height, 0.3f);
+    values[5] = -1.0f;  // nothing there
+    std::vector<int> levels;
+
+    ditherLevels(values, width, height, 2, DitherMode::None, levels);
+    CHECK(levels[0] == 0);
+    CHECK(levels[5] == -1);
+
+    for (DitherMode mode : {DitherMode::Ordered, DitherMode::FloydSteinberg}) {
+        ditherLevels(values, width, height, 2, mode, levels);
+        int on = 0;
+        for (int level : levels) on += level == 1;
+        CAPTURE(ditherModeName(mode));
+        CHECK(levels[5] == -1);
+        CHECK(static_cast<double>(on) / (width * height) == doctest::Approx(0.3).epsilon(0.1));
+    }
+    // Values exactly on a level stay there.
+    std::fill(values.begin(), values.end(), 0.5f);
+    ditherLevels(values, width, height, 3, DitherMode::FloydSteinberg, levels);
+    for (int level : levels) REQUIRE(level == 1);
+}
+
+TEST_CASE("dither: the xterm palette round-trips") {
+    for (int index = 16; index < 256; ++index) CHECK(nearestXterm256(xterm256Color(index)) == index);
+}
+
+TEST_CASE("halfblock: 256-colour output is dithered, 24-bit output is not") {
+    // A smooth grey ramp, 32 x 16 pixels.
+    Image ramp(32, 16);
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 32; ++x) {
+            const auto v = static_cast<std::uint8_t>(60 + x * 2);
+            ramp.row(y)[x] = {v, static_cast<std::uint8_t>(v / 2), 30, 255};
+        }
+    const DrawArea area{32, 8, 10, 20};
+    auto render = [&](ColorDepth depth, DitherMode mode, bool still) {
+        auto backend = makeBackend(BackendKind::HalfBlock, depth);
+        int w = 0, h = 0;
+        backend->configure(area, w, h);
+        backend->setDither(mode);
+        std::string out;
+        if (still) backend->print(ramp.view(), out);
+        else backend->present(ramp.view(), out);
+        return out;
+    };
+    // Count how many different colour codes appear: banding has few.
+    auto colours = [](const std::string& out) {
+        std::set<std::string> seen;
+        for (std::size_t pos = out.find("8;5;"); pos != std::string::npos; pos = out.find("8;5;", pos + 1))
+            seen.insert(out.substr(pos, out.find_first_of("m;", pos + 4) - pos));
+        return seen.size();
+    };
+
+    const std::string banded = render(ColorDepth::Indexed256, DitherMode::None, true);
+    const std::string ordered = render(ColorDepth::Indexed256, DitherMode::Ordered, true);
+    const std::string diffused = render(ColorDepth::Indexed256, DitherMode::FloydSteinberg, true);
+    CHECK(banded != ordered);
+    CHECK(banded != diffused);
+    CHECK(ordered != diffused);
+    // The same palette entries, mixed: no new colours are invented...
+    CHECK(colours(ordered) >= colours(banded));
+    // ...but neighbouring cells now differ, so there is more to send.
+    CHECK(ordered.size() > banded.size());
+
+    // Auto: ordered when animating, error diffusion for a printed still.
+    CHECK(render(ColorDepth::Indexed256, DitherMode::Auto, true) == diffused);
+    CHECK(render(ColorDepth::Indexed256, DitherMode::Auto, false) ==
+          render(ColorDepth::Indexed256, DitherMode::Ordered, false));
+
+    // With 24-bit colour there is nothing to hide.
+    CHECK(render(ColorDepth::TrueColor, DitherMode::FloydSteinberg, true) ==
+          render(ColorDepth::TrueColor, DitherMode::None, true));
+}
+
+TEST_CASE("braille: dithering turns the dots into a halftone of the shading") {
+    auto backend = makeBackend(BackendKind::Braille, ColorDepth::None);
+    const DrawArea area{16, 8, 10, 20};
+    int w = 0, h = 0;
+    backend->configure(area, w, h);
+    REQUIRE(w == 32);
+    REQUIRE(h == 32);
+    CHECK(backend->wantsWireframe());  // by default it draws lines
+
+    auto dots = [&](int grey) {
+        const Image image = solid(
+            w, h,
+            {static_cast<std::uint8_t>(grey), static_cast<std::uint8_t>(grey), static_cast<std::uint8_t>(grey), 255});
+        std::string out;
+        backend->print(image.view(), out);
+        // Each Braille character is U+2800 plus one bit per raised dot.
+        int raised = 0;
+        for (std::size_t i = 0; i + 2 < out.size(); ++i) {
+            const auto b0 = static_cast<unsigned char>(out[i]);
+            if (b0 != 0xE2) continue;
+            const unsigned cp = ((b0 & 0x0Fu) << 12) | ((static_cast<unsigned char>(out[i + 1]) & 0x3Fu) << 6) |
+                                (static_cast<unsigned char>(out[i + 2]) & 0x3Fu);
+            if (cp >= 0x2800 && cp <= 0x28FF)
+                for (unsigned bit = cp - 0x2800; bit; bit >>= 1) raised += bit & 1;
+        }
+        return raised;
+    };
+    // Without dithering every covered pixel is a dot, whatever its brightness.
+    CHECK(dots(40) == 32 * 32);
+    CHECK(dots(220) == 32 * 32);
+
+    for (DitherMode mode : {DitherMode::Ordered, DitherMode::FloydSteinberg}) {
+        backend->setDither(mode);
+        CAPTURE(ditherModeName(mode));
+        CHECK_FALSE(backend->wantsWireframe());  // now it wants shaded surfaces
+        const int dark = dots(40), mid = dots(128), bright = dots(220);
+        CHECK(dark < mid);
+        CHECK(mid < bright);
+        CHECK(mid == doctest::Approx(32 * 32 / 2).epsilon(0.15));
+        CHECK(dots(0) == 0);
+        CHECK(dots(255) == 32 * 32);
+    }
+}
+
+TEST_CASE("ascii and sixel honour the dither mode") {
+    Image ramp(40, 12);
+    for (int y = 0; y < 12; ++y)
+        for (int x = 0; x < 40; ++x) {
+            const auto v = static_cast<std::uint8_t>(30 + x * 5);
+            ramp.row(y)[x] = {v, v, v, 255};
+        }
+    const DrawArea area{40, 12, 10, 20};
+    auto render = [&](BackendKind kind, DitherMode mode) {
+        auto backend = makeBackend(kind, ColorDepth::None);
+        int w = 0, h = 0;
+        backend->configure(area, w, h);
+        backend->setDither(mode);
+        // Feed an image of exactly the size the backend asked for.
+        Image image(w, h);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) image.row(y)[x] = ramp.row(y * 12 / h)[x * 40 / w];
+        std::string out;
+        backend->print(image.view(), out);
+        return out;
+    };
+    // ASCII: off unless asked for.
+    CHECK(render(BackendKind::Ascii, DitherMode::Auto) == render(BackendKind::Ascii, DitherMode::None));
+    CHECK(render(BackendKind::Ascii, DitherMode::Ordered) != render(BackendKind::Ascii, DitherMode::None));
+    CHECK(render(BackendKind::Ascii, DitherMode::FloydSteinberg) != render(BackendKind::Ascii, DitherMode::Ordered));
+
+    // Sixel: three different encodings of the same picture; Auto is error
+    // diffusion for a still.
+    const std::string none = render(BackendKind::Sixel, DitherMode::None);
+    const std::string ordered = render(BackendKind::Sixel, DitherMode::Ordered);
+    const std::string diffused = render(BackendKind::Sixel, DitherMode::FloydSteinberg);
+    CHECK(none != ordered);
+    CHECK(ordered != diffused);
+    CHECK(render(BackendKind::Sixel, DitherMode::Auto) == diffused);
+    // Plain rounding gives long runs of one colour, which compress well.
+    CHECK(none.size() < ordered.size());
 }

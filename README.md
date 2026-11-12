@@ -46,7 +46,8 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 |     |     |
 | :-: | --- |
 | 🔺 | **A complete pipeline, from scratch**: vertex transform, homogeneous clipping, back-face culling, depth-buffered tile rasterization, perspective-correct texturing. |
-| 💡 | **Real shading**: flat, Gouraud and Phong lighting, diffuse and normal maps, mip-mapping, hidden-line wireframe. |
+| 💡 | **Real shading**: flat, Gouraud, Phong, physically based (metallic / roughness, as glTF defines it) and toon with ink outlines; diffuse and normal maps, mip-mapping, alpha blending, hidden-line wireframe. |
+| 🌅 | **Lighting**: soft shadow maps, HDR environment maps with image-based lighting and a skybox, plus SSAO, bloom, FXAA and a choice of tone curves. |
 | 🖥️ | **Five ways to draw**: Kitty graphics, Sixel, 24-bit half-blocks, Braille dots and plain ASCII. The best one is picked automatically. |
 | ⚡ | **Fast**: multithreaded tiles, SIMD (SSE2 / NEON), and only the cells that changed are redrawn. A 95k-triangle model renders in under 3 ms. |
 | 🦊 | **Animation**: glTF skeletal animation with skinning, morph targets and cross-fades between clips, plus a timeline you can pause, scrub, slow down or run backwards. |
@@ -124,6 +125,8 @@ termesh model.glb --spin --gif out.gif  # record a 360° turntable
 termesh model.glb --print               # print one frame and exit
 termesh fox.glb --animation Run         # play a named animation
 termesh fox.glb --list-animations       # see which animations a file has
+termesh model.glb -s pbr --env sky --shadows   # physically based, lit by a sky, with shadows
+termesh model.glb -s toon               # cel shading with ink outlines
 ```
 
 ### Controls
@@ -135,11 +138,16 @@ termesh fox.glb --list-animations       # see which animations a file has
 | Zoom                   | wheel                     | <kbd>+</kbd> <kbd>-</kbd>     |
 | Auto-rotate on / off   |                           | <kbd>space</kbd>              |
 | Reset the view         |                           | <kbd>r</kbd>                  |
-| Flat / Gouraud / Phong |                           | <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>, or <kbd>s</kbd> to cycle |
+| Flat / Gouraud / Phong / PBR / toon |              | <kbd>1</kbd> – <kbd>5</kbd>, or <kbd>s</kbd> to cycle |
 | Wireframe              |                           | <kbd>w</kbd>                  |
 | Textures, normal maps  |                           | <kbd>t</kbd>, <kbd>n</kbd>    |
 | Back-face culling      |                           | <kbd>c</kbd>                  |
 | Turn the light         |                           | <kbd>[</kbd> <kbd>]</kbd>     |
+| Shadows                |                           | <kbd>x</kbd>                  |
+| Next environment, sky background |                 | <kbd>e</kbd>, <kbd>y</kbd>    |
+| Ambient occlusion, bloom, outlines, FXAA |         | <kbd>u</kbd> <kbd>g</kbd> <kbd>i</kbd> <kbd>f</kbd> |
+| Tone curve, exposure   |                           | <kbd>z</kbd>, <kbd>{</kbd> <kbd>}</kbd> |
+| Dithering mode         |                           | <kbd>d</kbd>                  |
 | Play / pause animation |                           | <kbd>a</kbd>                  |
 | Step back / forward    |                           | <kbd>,</kbd> <kbd>.</kbd>     |
 | Slower / faster        |                           | <kbd>&lt;</kbd> <kbd>&gt;</kbd> |
@@ -158,7 +166,16 @@ termesh fox.glb --list-animations       # see which animations a file has
 | ------ | ------- |
 | `-b`, `--backend <name>` | `kitty`, `sixel`, `halfblock`, `braille` or `ascii` (default: best available) |
 | `--color <depth>` | `truecolor`, `256` or `none` (default: detect) |
-| `-s`, `--shading <mode>` | `flat`, `gouraud` or `phong` (default) |
+| `--dither <mode>` | `auto`, `none`, `ordered` or `fs` (Floyd-Steinberg); with Braille, `ordered` / `fs` draw a shaded halftone |
+| `-s`, `--shading <mode>` | `flat`, `gouraud`, `phong` (default), `pbr` or `toon` |
+| `--shadows`, `--shadow-size <n>`, `--shadow-softness <1-7>` | shadows from the key light |
+| `--light-angle <deg>` | turn the key light about the vertical axis |
+| `--env <name\|file>` | environment lighting: `studio`, `sky`, `sunset`, or an `.hdr` panorama |
+| `--skybox`, `--no-skybox`, `--sky-blur <0-1>` | draw the environment as the background |
+| `--env-intensity <x>`, `--env-rotation <deg>` | brightness and turn of the environment |
+| `--ssao`, `--bloom`, `--fxaa` | ambient occlusion, glow, fast anti-aliasing |
+| `--outline`, `--no-outline` | ink outlines (on by default with toon shading) |
+| `--tonemap <curve>`, `--exposure <stops>` | `aces` (default), `reinhard`, `filmic` or `linear` |
 | `-w`, `--wireframe` | start in wireframe mode |
 | `--no-textures`, `--no-normal-maps`, `--no-cull` | switch parts of the renderer off |
 | `--bg <rrggbb>` | background colour |
@@ -231,9 +248,14 @@ synchronized update so frames never tear.
 <img src="docs/media/shading.png" alt="The same model with flat, Gouraud and Phong shading, and as a wireframe" width="876">
 </div>
 
-All three modes use the same Blinn-Phong lighting; what changes is how often it is evaluated. Flat shading
+These three modes use the same Blinn-Phong lighting; what changes is how often it is evaluated. Flat shading
 lights each triangle once, Gouraud lights each vertex and interpolates the colour, and Phong interpolates the
 normal and lights every pixel, which is also what makes normal maps possible.
+
+Two more models work per pixel. `--shading pbr` is the microfacet model glTF materials are written for
+(Cook-Torrance with GGX), which with `--env` picks up image-based lighting from an HDR panorama. `--shading toon`
+snaps the lighting to a few flat tones and inks the silhouettes and creases. Shadows, ambient occlusion, bloom
+and the tone curve can be switched on over any of them.
 
 ## 🔧 How it works
 
@@ -315,8 +337,9 @@ AddressSanitizer / UBSan build. Formatting follows the checked-in `.clang-format
 - Skinning uses at most four bones per vertex, and glTF cameras and lights are ignored.
 - Vertex colours and secondary UV sets are ignored.
 - Draco- and meshopt-compressed geometry and KTX2 / WebP textures are not supported.
-- Translucent materials are drawn as cut-outs rather than blended.
-- Lighting is Blinn-Phong with a fixed light rig, so glTF metallic-roughness materials are approximated.
+- Translucent surfaces are sorted per triangle, so two that intersect each other can blend in the wrong order.
+- Shadows come from directional and spot lights, not point lights, and only in the per-pixel shading modes.
+- Environment reflections use the panorama's mip chain rather than a full prefiltering pass.
 
 ## 🙏 Credits
 

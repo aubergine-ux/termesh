@@ -19,6 +19,7 @@ struct Options {
     // Output selection (unset = detect).
     std::optional<BackendKind> backend;
     std::optional<ColorDepth> color;
+    DitherMode dither = DitherMode::Auto;
 
     // Rendering.
     ShadingMode shading = ShadingMode::Phong;
@@ -29,6 +30,23 @@ struct Options {
     Color8 background{16, 17, 22, 255};
     int supersampling = 0;  // 0 = backend default
     int threads = 0;        // 0 = all hardware threads
+
+    // Lighting.
+    float lightAngle = 0.0f;  // turn of the key light about the vertical axis, degrees
+    bool shadows = false;
+    int shadowMapSize = 1024;
+    int shadowSoftness = 3;
+    std::string environment;     // built-in name or path to an .hdr; empty = studio
+    std::optional<bool> skybox;  // unset = show the environment if it is a panorama
+    float skyBlur = 0.0f;        // 0-1
+    float envIntensity = 1.0f;
+    float envRotation = 0.0f;  // degrees
+
+    // Post-processing.
+    bool ssao = false, bloom = false, fxaa = false;
+    std::optional<bool> outline;  // unset = on with toon shading
+    ToneMapper toneMapper = ToneMapper::Aces;
+    float exposure = 0.0f;  // stops
 
     // Camera.
     std::optional<float> yaw, pitch;  // degrees
@@ -75,8 +93,18 @@ ParseResult parseOptions(int argc, const char* const* argv);
 // name. Returns -1 if there is no such clip; an empty spec means the first.
 int findAnimation(const Model& model, const std::string& spec);
 
-// The initial render settings and camera described by the options.
+// The initial render settings and camera described by the options. The
+// environment is not part of them: load it with loadEnvironmentOption and
+// point RenderSettings::environment at it.
 RenderSettings makeRenderSettings(const Options& options);
+
+// The environment `--env` asks for (a built-in name or a file), with
+// --env-intensity and --env-rotation applied. Returns false and sets `error`
+// if it cannot be loaded.
+bool loadEnvironmentOption(const Options& options, Environment& out, std::string& error);
+
+// Whether the environment should be drawn as the background.
+bool wantsSkybox(const Options& options, const Environment& environment);
 OrbitCamera makeCamera(const Options& options, const Model& model);
 
 std::string usageText();

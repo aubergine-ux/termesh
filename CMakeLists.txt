@@ -71,6 +71,8 @@ add_library(termesh_core STATIC
     src/pipeline/clip.cpp
     src/pipeline/renderer.cpp
     src/pipeline/resolve.cpp
+    src/post/post.cpp
+    src/scene/environment.cpp
     src/scene/gltf_loader.cpp
     src/scene/loader.cpp
     src/scene/model.cpp
@@ -81,6 +83,14 @@ target_include_directories(termesh_core PUBLIC src)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)
 target_link_libraries(termesh_core PUBLIC Threads::Threads termesh_third_party PRIVATE termesh_warnings)
 target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSION}")
+
+# The fragment shader is a long run of three-component vector arithmetic.
+# GCC's SLP vectoriser packs pairs of those components into SSE registers
+# and then spends more instructions shuffling them in and out than the
+# packing saves: the shader measures about 10% slower with it on.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/pipeline/renderer.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-slp-vectorize)
+endif()
 
 if(TERMESH_NATIVE AND NOT MSVC)
     target_compile_options(termesh_core PUBLIC -march=native)
@@ -106,7 +116,9 @@ if(TERMESH_BUILD_TESTS)
         tests/test_input.cpp
         tests/test_math.cpp
         tests/test_output.cpp
+        tests/test_post.cpp
         tests/test_raster.cpp
+        tests/test_render.cpp
         tests/test_scene.cpp
     )
     target_link_libraries(termesh_tests PRIVATE termesh_core termesh_warnings)

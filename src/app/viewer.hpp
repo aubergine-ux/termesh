@@ -22,7 +22,9 @@ namespace termesh {
 class Viewer {
 public:
     // `player` drives the model's animation; null for a static model.
-    Viewer(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool);
+    // `environment` is the one chosen on the command line.
+    Viewer(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
+           ThreadPool& pool);
 
     // Runs until the user quits. Returns the process exit code.
     int run();
@@ -35,6 +37,8 @@ private:
     void handleKey(const KeyEvent& key);
     void handleMouse(const MouseEvent& mouse);
     bool handleAnimationKey(char32_t ch);  // true if the key was an animation control
+    bool handleEffectKey(char32_t ch);     // true if the key was a lighting / effect control
+    RenderSettings frameSettings() const;  // settings_ plus everything decided per frame
 
     // --- output ---
     BackendKind effectiveBackend() const;
@@ -69,6 +73,13 @@ private:
     OrbitCamera camera_;
     RenderSettings settings_;
     float lightYaw_ = 0.0f;
+    // Environments to cycle through with 'e': the built-in ones, plus the
+    // file given on the command line if there was one.
+    std::vector<Environment> environments_;
+    std::size_t environment_ = 0;
+    // Outlines follow the shading mode (on for toon) until toggled by hand.
+    bool outlineAuto_ = true;
+    DitherMode dither_ = DitherMode::Auto;
 
     bool running_ = true;
     bool dirty_ = true;  // the picture needs redrawing

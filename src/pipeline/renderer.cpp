@@ -13,9 +13,25 @@ const char* shadingModeName(ShadingMode mode) {
     switch (mode) {
         case ShadingMode::Flat: return "flat";
         case ShadingMode::Gouraud: return "gouraud";
+        case ShadingMode::Pbr: return "pbr";
+        case ShadingMode::Toon: return "toon";
         default: return "phong";
     }
 }
+
+// What one pass over the scene's geometry needs to know. The main view and
+// each shadow map are separate passes over the same models.
+struct Renderer::GeometryPass {
+    Mat4 viewProjection;
+    Vec3 eye;
+    int width = 0, height = 0;
+    VaryingLayout layout = VaryingLayout::PerPixel;
+    bool flat = false;  // Lit only: light once per face rather than per vertex
+    bool cullBackfaces = true;
+    // Draw translucent materials last, back to front, without depth writes.
+    bool sortTranslucent = false;
+    const LightingContext* lighting = nullptr;  // Lit only
+};
 
 namespace {
 
@@ -26,16 +42,26 @@ namespace {
 //
 //   Flat / Gouraud  lighting is already computed, so the varyings carry its
 //                   result: diffuse light RGB and specular light RGB.
-//   Phong           lighting happens per pixel, so the varyings carry its
-//                   inputs: normal, world position and tangent.
+//   per pixel       (Phong, PBR, toon) lighting happens in the fragment
+//                   shader, so the varyings carry its inputs: normal, world
+//                   position and tangent.
 constexpr int kUV = 0;
 constexpr int kDiffuse = 2, kSpecular = 5;            // Flat / Gouraud
-constexpr int kNormal = 2, kWorld = 5, kTangent = 8;  // Phong
+constexpr int kNormal = 2, kWorld = 5, kTangent = 8;  // per pixel
+constexpr int kDepthVaryingCount = 2;
 constexpr int kLitVaryingCount = 8;
-constexpr int kPhongVaryingCount = 11;
+constexpr int kPerPixelVaryingCount = 11;
 
 constexpr int kTrianglesPerChunk = 512;
 constexpr int kVerticesPerChunk = 2048;
+
+int varyingCountFor(Renderer::VaryingLayout layout) {
+    switch (layout) {
+        case Renderer::VaryingLayout::DepthOnly: return kDepthVaryingCount;
+        case Renderer::VaryingLayout::Lit: return kLitVaryingCount;
+        default: return kPerPixelVaryingCount;
+    }
+}
 
 void store(float* dst, Vec3 v) {
     dst[0] = v.x;
@@ -48,70 +74,120 @@ double msSince(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
-// ---------------------------------------------------------- fragment stage ---
+const Environment& defaultEnvironment() {
+    static const Environment environment;
+    return environment;
+}
 
+// Alpha of the base colour at a pixel, and whether that is enough for the
+// surface to count as solid (for depth-only purposes: wireframe fill and
+// shadow casting).
+bool isSolid(const Renderer::MaterialRef& ref, const RasterTriangle& tri, const Fragment& frag) {
+    const Material& material = *ref.material;
+    if (material.alphaMode == AlphaMode::Opaque) return true;
+    float alpha = material.baseColor.w;
+    if (material.baseColorTexture >= 0)
+        alpha *=
+            ref.textures[material.baseColorTexture].sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod).w;
+    // Translucent surfaces count as solid once they are mostly opaque.
+    return alpha >= (material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : 0.5f);
+}
+
+// ---------------------------------------------------------- fragment stage ---
+//
+// Shading produces a linear HDR colour. Where it goes next depends on the
+// frame (see Renderer::render), so the shader is written once against an
+// "output" and compiled for each of the two:
+
+// Keep the colour as it is, in the float buffer, for post-processing.
+struct HdrOutput {
+    using Pixel = Vec4;
+
+    void opaque(Vec4& out, Vec3 color) const { out = Vec4(color, 1.0f); }
+    // The "over" operator: this surface covers `alpha` of the pixel and
+    // lets the rest of what was already there show through. Coverage
+    // accumulates the same way, so that the background can be mixed in
+    // afterwards by whatever is left.
+    void translucent(Vec4& out, Vec3 color, float alpha) const {
+        out = Vec4(color * alpha + out.xyz() * (1.0f - alpha), alpha + out.w * (1.0f - alpha));
+    }
+    // Looks empty, but is not: see the wireframe fill.
+    void nothing(Vec4& out) const { out = Vec4(0.0f); }
+};
+
+// Finish the pixel on the spot: tone map and encode straight into the 8-bit
+// framebuffer. Only used for frames with nothing translucent in them,
+// because blending has to happen in linear light, before tone mapping.
+struct DirectOutput {
+    using Pixel = Color8;
+    float exposure;
+    ToneMapper mapper;
+    Color8 empty;  // the background colour with alpha 0: "no geometry here"
+
+    void opaque(Color8& out, Vec3 color) const { out = linearToSrgb(toneMap(color * exposure, mapper)); }
+    void translucent(Color8& out, Vec3 color, float) const { opaque(out, color); }
+    void nothing(Color8& out) const { out = empty; }
+};
+
+template <typename Output>
 struct FragmentShader {
-    const Model* model;
-    Lights lights;
+    using Pixel = typename Output::Pixel;
+
+    Output output;
+    const Renderer::MaterialRef* materials;
+    LightingContext lighting;
     Vec3 eye;
-    Color8 background;
+    ShadingMode mode;
     int lineWidth;
     bool perPixelLighting, wireframe, textures, normalMaps;
 
-    int varyingCount() const { return perPixelLighting ? kPhongVaryingCount : kLitVaryingCount; }
+    int varyingCount() const { return perPixelLighting ? kPerPixelVaryingCount : kLitVaryingCount; }
 
     // In wireframe mode the triangles themselves only lay down depth (pushed
     // back a little, see rasterizeTile) and the edges are drawn over them.
     float depthSlopeBias() const { return wireframe ? static_cast<float>(lineWidth) * 0.5f + 1.0f : 0.0f; }
 
     // Triangle interiors.
-    bool operator()(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
+    bool operator()(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
         if (!wireframe) return shade(tri, frag, out);
-        // Paint background, but still occupy the depth buffer so that lines
-        // behind this surface stay hidden. Cut-outs remain see-through.
-        if (!passesAlphaTest(tri, frag)) return false;
-        out = background;
+        // Leave the pixel looking empty, but still occupy the depth buffer so
+        // that lines behind this surface stay hidden. Cut-outs remain
+        // see-through.
+        if (!isSolid(materials[tri.material], tri, frag)) return false;
+        output.nothing(out);
         return true;
     }
 
     // Wireframe lines: shaded like the surface they belong to, then
     // lightened so they read against a dark background.
-    bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Color8& out) const { return shade(tri, frag, out); }
+    bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const { return shade(tri, frag, out); }
 
-    bool passesAlphaTest(const RasterTriangle& tri, const Fragment& frag) const {
-        const Material& material = model->materials[tri.material];
-        if (material.alphaMode != AlphaMode::Mask) return true;
-        float alpha = material.baseColor.w;
-        if (material.baseColorTexture >= 0)
-            alpha *= model->textures[material.baseColorTexture]
-                         .sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod)
-                         .w;
-        return alpha >= material.alphaCutoff;
-    }
-
-    bool shade(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
-        const Material& material = model->materials[tri.material];
+    bool shade(const RasterTriangle& tri, const Fragment& frag, Pixel& out) const {
+        const Renderer::MaterialRef& ref = materials[tri.material];
+        const Material& material = *ref.material;
         const float* v = frag.varyings;
         const Vec2 uv{v[kUV], v[kUV + 1]};
 
         // Base colour, and alpha cut-outs (leaves, fences, decals).
         Vec4 base = material.baseColor;
-        if (material.baseColorTexture >= 0 && (textures || material.alphaMode == AlphaMode::Mask)) {
-            const Vec4 texel = model->textures[material.baseColorTexture].sample(uv, tri.lod);
+        if (material.baseColorTexture >= 0 && (textures || material.alphaMode != AlphaMode::Opaque)) {
+            const Vec4 texel = ref.textures[material.baseColorTexture].sample(uv, tri.lod);
             if (textures) base = base * texel;
             else base.w *= texel.w;
         }
         if (material.alphaMode == AlphaMode::Mask && base.w < material.alphaCutoff) return false;
+        const bool translucent = material.alphaMode == AlphaMode::Blend && tri.blend;
+        if (translucent && base.w <= 0.004f) return false;  // invisible: do not even touch the pixel
 
         float metallic = material.metallic, roughness = material.roughness, occlusion = 1.0f;
         if (textures && material.metallicRoughnessTexture >= 0) {
-            const Vec4 mr = model->textures[material.metallicRoughnessTexture].sample(uv, tri.lod);
+            const Vec4 mr = ref.textures[material.metallicRoughnessTexture].sample(uv, tri.lod);
             roughness *= mr.y;
             metallic *= mr.z;
             if (material.occlusionInRed) occlusion = mr.x;
         }
 
-        Lighting light;
+        Vec3 color;
         if (perPixelLighting) {
             // Interpolating unit normals shortens them, so renormalise.
             Vec3 n = normalize(load3(v + kNormal));
@@ -127,38 +203,66 @@ struct FragmentShader {
                 if (lengthSquared(t) > 1e-12f) {
                     t = normalize(t);
                     const Vec3 b = cross(n, t) * tri.tangentSign;
-                    const Vec4 s = model->textures[material.normalTexture].sample(uv, tri.lod);
+                    const Vec4 s = ref.textures[material.normalTexture].sample(uv, tri.lod);
                     const float nx = (s.x * 2.0f - 1.0f) * material.normalScale;
                     const float ny = (s.y * 2.0f - 1.0f) * material.normalScale;
                     const float nz = s.z * 2.0f - 1.0f;
                     n = normalize(t * nx + b * ny + n * nz);
                 }
             }
-            const Vec3 toEye = normalize(eye - load3(v + kWorld));
-            light = computeLighting(lights, n, toEye, roughness);
+
+            const Vec3 position = load3(v + kWorld);
+            const Vec3 view = normalize(eye - position);
+            if (mode == ShadingMode::Phong) {
+                color = combineBlinnPhong(blinnPhong(lighting, position, n, view, roughness, true), base.xyz(),
+                                          metallic, occlusion);
+            } else {
+                // The other models take the surface as one bundle. It is
+                // only put together here, off the default path: a struct
+                // handed to a function has to exist in memory, which the
+                // Phong path above avoids.
+                Surface surface;
+                surface.position = position;
+                surface.normal = n;
+                surface.view = view;
+                surface.albedo = base.xyz();
+                surface.metallic = metallic;
+                surface.roughness = roughness;
+                surface.occlusion = occlusion;
+                color = mode == ShadingMode::Pbr ? shadePbr(lighting, surface) : shadeToon(lighting, surface);
+            }
         } else {
+            Lighting light;
             light.diffuse = load3(v + kDiffuse);
             light.specular = load3(v + kSpecular);
+            color = combineBlinnPhong(light, base.xyz(), metallic, occlusion);
         }
-
-        // Metals have no diffuse reflection; their colour tints the specular
-        // reflection instead. Non-metals reflect about 4% specularly.
-        const Vec3 albedo = base.xyz();
-        const Vec3 diffuseColor = albedo * (1.0f - metallic);
-        const Vec3 specularColor = lerp(Vec3(0.04f), albedo, metallic);
-
-        Vec3 color = diffuseColor * light.diffuse * occlusion + specularColor * light.specular;
 
         Vec3 emissive = material.emissive;
         if (textures && material.emissiveTexture >= 0)
-            emissive *= model->textures[material.emissiveTexture].sample(uv, tri.lod).xyz();
+            emissive *= ref.textures[material.emissiveTexture].sample(uv, tri.lod).xyz();
         color += emissive;
 
         if (wireframe) color = lerp(color, Vec3(1.0f), 0.3f);
 
-        out = linearToSrgb(toneMap(color));
+        if (translucent) output.translucent(out, color, std::min(base.w, 1.0f));
+        else output.opaque(out, color);
         return true;
     }
+};
+
+// Shadow maps only need depth: no lighting, no colour.
+struct DepthShader {
+    const Renderer::MaterialRef* materials;
+
+    int varyingCount() const { return kDepthVaryingCount; }
+    // Push the surface away from the light in proportion to its slope, so
+    // that it does not shadow itself (see ShadowMap::bias).
+    float depthSlopeBias() const { return 1.5f; }
+    bool operator()(const RasterTriangle& tri, const Fragment& frag, std::uint8_t&) const {
+        return isSolid(materials[tri.material], tri, frag);
+    }
+    bool shadeEdge(const RasterTriangle&, const Fragment&, std::uint8_t&) const { return false; }  // never drawn
 };
 
 // --------------------------------------------------------- primitive setup ---
@@ -171,9 +275,10 @@ struct SetupContext {
 };
 
 struct TriangleInfo {
-    std::uint16_t material;
+    std::uint32_t material;
     float tangentSign;
-    bool twoSided, needsLod;
+    bool twoSided, needsLod, blend;
+    bool mirrored;  // the model transform flips the winding
 };
 
 // Project three clip-space vertices to the screen and append the resulting
@@ -203,10 +308,11 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
     // Back-face culling. The sign of the screen-space area tells which way
     // the triangle winds on screen. Front faces are counter-clockwise in the
     // model, but the viewport's y flip mirrors the image, so on screen they
-    // come out clockwise - which is a negative area here.
+    // come out clockwise - which is a negative area here. (A model placed
+    // with a mirroring transform is the other way round.)
     const std::int64_t area = edgeFunction(x[0], y[0], x[1], y[1], x[2], y[2]);
     if (area == 0) return;  // edge-on or smaller than the subpixel grid
-    const bool backFacing = area > 0;
+    const bool backFacing = (area > 0) != info.mirrored;
     if (backFacing && ctx.cullBackfaces && !info.twoSided) return;
 
     // The rasterizer wants positive area: swap two vertices if necessary.
@@ -230,6 +336,7 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
     tri.tangentSign = info.tangentSign;
     tri.backFacing = backFacing;
     tri.edgeMask = edgeMask;
+    tri.blend = info.blend;
 
     // Mip level. Compare the triangle's area in texture space with its area
     // on screen: their ratio is how much texture one pixel covers. One level
@@ -249,213 +356,420 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
 
 }  // namespace
 
-RenderStats Renderer::render(const Model& model, const Camera& camera, const RenderSettings& settings,
-                             Framebuffer& fb) {
-    RenderStats stats;
-    const int width = fb.width(), height = fb.height();
-    if (width <= 0 || height <= 0) return stats;
-
-    const bool phong = settings.shading == ShadingMode::Phong;
-    const bool flat = settings.shading == ShadingMode::Flat;
-    const Mat4 viewProjection = camera.projection * camera.view;
-
-    // The light rig is defined relative to the camera; bring it into world
-    // space, where lighting is computed.
-    Lights lights;
-    const Mat4 cameraToWorld = inverse(camera.view);
-    lights.keyDirection = normalize(transformDirection(cameraToWorld, settings.lightDirection));
-    lights.fillDirection = normalize(transformDirection(cameraToWorld, {0.8f, -0.1f, 0.4f}));
+void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass& pass, RenderStats& stats) {
+    const bool perPixel = pass.layout == VaryingLayout::PerPixel;
+    const bool lit = pass.layout == VaryingLayout::Lit;
+    const bool flat = lit && pass.flat;
 
     SetupContext ctx;
-    ctx.width = static_cast<float>(width);
-    ctx.height = static_cast<float>(height);
-    ctx.maxX = width * kSubpixelScale;
-    ctx.maxY = height * kSubpixelScale;
-    ctx.cullBackfaces = settings.cullBackfaces;
-    ctx.varyingCount = phong ? kPhongVaryingCount : kLitVaryingCount;
+    ctx.width = static_cast<float>(pass.width);
+    ctx.height = static_cast<float>(pass.height);
+    ctx.maxX = pass.width * kSubpixelScale;
+    ctx.maxY = pass.height * kSubpixelScale;
+    ctx.cullBackfaces = pass.cullBackfaces;
+    ctx.varyingCount = varyingCountFor(pass.layout);
 
     std::size_t chunkCount = 0;
+    std::uint32_t materialBase = 0;
 
-    for (const Mesh& mesh : model.meshes) {
-        const std::size_t triangleCount = mesh.indices.size() / 3;
-        if (triangleCount == 0) continue;
-        stats.trianglesSubmitted += triangleCount;
+    for (const DrawItem& item : items) {
+        const Model& model = *item.model;
+        // Most models sit where they were loaded; skip the matrix maths then.
+        const bool placed = !(item.transform == Mat4::identity());
+        const Mat4& transform = item.transform;
+        const Mat4 normalTransform = placed ? normalMatrix(transform) : Mat4::identity();
+        const bool mirrored =
+            placed && dot(cross(transform.c[0].xyz(), transform.c[1].xyz()), transform.c[2].xyz()) < 0.0f;
+        const Mat4 modelViewProjection = placed ? pass.viewProjection * transform : pass.viewProjection;
+        auto worldPosition = [&](const Vertex& v) {
+            return placed ? transformPoint(transform, v.position) : v.position;
+        };
+        auto worldNormal = [&](const Vertex& v) {
+            return placed ? normalize(transformDirection(normalTransform, v.normal)) : v.normal;
+        };
 
-        const Material& material = model.materials[mesh.material];
-        const bool twoSided = material.doubleSided || !settings.cullBackfaces;
+        for (const Mesh& mesh : model.meshes) {
+            const std::size_t triangleCount = mesh.indices.size() / 3;
+            if (triangleCount == 0) continue;
+            stats.trianglesSubmitted += triangleCount;
 
-        // ------------------------------------------------------ vertex stage
-        // Every vertex is transformed exactly once, however many triangles
-        // share it.
-        auto t0 = std::chrono::steady_clock::now();
-        clipVertices_.resize(mesh.vertices.size());
-        const int vertexChunks = static_cast<int>((mesh.vertices.size() + kVerticesPerChunk - 1) / kVerticesPerChunk);
-        pool_.parallelFor(vertexChunks, [&](int chunk) {
-            const std::size_t begin = static_cast<std::size_t>(chunk) * kVerticesPerChunk;
-            const std::size_t end = std::min(begin + kVerticesPerChunk, mesh.vertices.size());
-            for (std::size_t i = begin; i < end; ++i) {
-                const Vertex& in = mesh.vertices[i];
-                ClipVertex& out = clipVertices_[i];
-                out.position = viewProjection * Vec4(in.position, 1.0f);
-                out.varyings[kUV] = in.uv.x;
-                out.varyings[kUV + 1] = in.uv.y;
-                if (phong) {
-                    store(out.varyings + kNormal, in.normal);
-                    store(out.varyings + kWorld, in.position);
-                    store(out.varyings + kTangent, in.tangent.xyz());
-                } else if (!flat) {
-                    // Gouraud: light the vertex now; the rasterizer will
-                    // interpolate the result.
-                    const Vec3 toEye = normalize(camera.position - in.position);
-                    Vec3 n = in.normal;
-                    if (twoSided && dot(n, toEye) < 0.0f) n = -n;
-                    const Lighting l = computeLighting(lights, n, toEye, material.roughness);
-                    store(out.varyings + kDiffuse, l.diffuse);
-                    store(out.varyings + kSpecular, l.specular);
-                }
-            }
-        });
-        stats.vertexMs += msSince(t0);
+            const Material& material = model.materials[mesh.material];
+            const bool twoSided = material.doubleSided || !pass.cullBackfaces;
 
-        // --------------------------------------------------- primitive setup
-        t0 = std::chrono::steady_clock::now();
-        const int meshChunks = static_cast<int>((triangleCount + kTrianglesPerChunk - 1) / kTrianglesPerChunk);
-        if (chunks_.size() < chunkCount + meshChunks) chunks_.resize(chunkCount + meshChunks);
-
-        TriangleInfo meshInfo{};
-        meshInfo.material = static_cast<std::uint16_t>(mesh.material);
-        meshInfo.twoSided = twoSided;
-        meshInfo.needsLod = mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
-                                            material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
-
-        pool_.parallelFor(meshChunks, [&](int chunk) {
-            TriangleInfo info = meshInfo;  // per-thread copy; tangentSign varies per triangle
-            std::vector<RasterTriangle>& out = chunks_[chunkCount + chunk];
-            out.clear();
-            const std::size_t begin = static_cast<std::size_t>(chunk) * kTrianglesPerChunk;
-            const std::size_t end = std::min(begin + kTrianglesPerChunk, triangleCount);
-
-            for (std::size_t tri = begin; tri < end; ++tri) {
-                const std::uint32_t i0 = mesh.indices[tri * 3];
-                const std::uint32_t i1 = mesh.indices[tri * 3 + 1];
-                const std::uint32_t i2 = mesh.indices[tri * 3 + 2];
-
-                // Trivial rejection: all three vertices outside one plane.
-                const unsigned c0 = clipOutcode(clipVertices_[i0].position);
-                const unsigned c1 = clipOutcode(clipVertices_[i1].position);
-                const unsigned c2 = clipOutcode(clipVertices_[i2].position);
-                if (c0 & c1 & c2) continue;
-
-                info.tangentSign = mesh.vertices[i0].tangent.w;
-
-                ClipVertex polygon[kMaxClipVertices];
-                const ClipVertex* verts[3] = {&clipVertices_[i0], &clipVertices_[i1], &clipVertices_[i2]};
-
-                if (flat) {
-                    // Flat shading: one normal - the true geometric normal of
-                    // the face - and one lighting evaluation at its centre,
-                    // copied to all three corners.
-                    const Vec3 p0 = mesh.vertices[i0].position;
-                    const Vec3 p1 = mesh.vertices[i1].position;
-                    const Vec3 p2 = mesh.vertices[i2].position;
-                    Vec3 n = normalize(cross(p1 - p0, p2 - p0), mesh.vertices[i0].normal);
-                    const Vec3 toEye = normalize(camera.position - (p0 + p1 + p2) * (1.0f / 3.0f));
-                    if (twoSided && dot(n, toEye) < 0.0f) n = -n;
-                    const Lighting l = computeLighting(lights, n, toEye, material.roughness);
-                    for (int k = 0; k < 3; ++k) {
-                        polygon[k] = *verts[k];
-                        store(polygon[k].varyings + kDiffuse, l.diffuse);
-                        store(polygon[k].varyings + kSpecular, l.specular);
-                        verts[k] = &polygon[k];
+            // -------------------------------------------------- vertex stage
+            // Every vertex is transformed exactly once, however many
+            // triangles share it.
+            auto t0 = std::chrono::steady_clock::now();
+            clipVertices_.resize(mesh.vertices.size());
+            const int vertexChunks =
+                static_cast<int>((mesh.vertices.size() + kVerticesPerChunk - 1) / kVerticesPerChunk);
+            pool_.parallelFor(vertexChunks, [&](int chunk) {
+                const std::size_t begin = static_cast<std::size_t>(chunk) * kVerticesPerChunk;
+                const std::size_t end = std::min(begin + kVerticesPerChunk, mesh.vertices.size());
+                for (std::size_t i = begin; i < end; ++i) {
+                    const Vertex& in = mesh.vertices[i];
+                    ClipVertex& out = clipVertices_[i];
+                    out.position = modelViewProjection * Vec4(in.position, 1.0f);
+                    out.varyings[kUV] = in.uv.x;
+                    out.varyings[kUV + 1] = in.uv.y;
+                    if (perPixel) {
+                        store(out.varyings + kNormal, worldNormal(in));
+                        store(out.varyings + kWorld, worldPosition(in));
+                        store(out.varyings + kTangent,
+                              placed ? transformDirection(transform, in.tangent.xyz()) : in.tangent.xyz());
+                    } else if (lit && !flat) {
+                        // Gouraud: light the vertex now; the rasterizer will
+                        // interpolate the result.
+                        const Vec3 position = worldPosition(in);
+                        const Vec3 toEye = normalize(pass.eye - position);
+                        Vec3 n = worldNormal(in);
+                        if (twoSided && dot(n, toEye) < 0.0f) n = -n;
+                        const Lighting l = blinnPhong(*pass.lighting, position, n, toEye, material.roughness, false);
+                        store(out.varyings + kDiffuse, l.diffuse);
+                        store(out.varyings + kSpecular, l.specular);
                     }
                 }
+            });
+            stats.vertexMs += msSince(t0);
 
-                const unsigned crossed = c0 | c1 | c2;
-                if (crossed == 0) {
-                    // Entirely inside the frustum - the common case.
-                    emitTriangle(verts, 0b111, info, ctx, out);
-                    continue;
-                }
+            // ----------------------------------------------- primitive setup
+            t0 = std::chrono::steady_clock::now();
+            const int meshChunks = static_cast<int>((triangleCount + kTrianglesPerChunk - 1) / kTrianglesPerChunk);
+            if (chunks_.size() < chunkCount + meshChunks) chunks_.resize(chunkCount + meshChunks);
+            if (chunkBlends_.size() < chunks_.size()) chunkBlends_.resize(chunks_.size());
 
-                // Straddles the frustum: clip, then triangulate the resulting
-                // convex polygon as a fan around its first vertex.
-                if (!flat)
-                    for (int k = 0; k < 3; ++k) polygon[k] = *verts[k];
-                const int n = clipPolygon(polygon, 3, crossed, ctx.varyingCount);
-                for (int k = 1; k + 1 < n; ++k) {
-                    const ClipVertex* fan[3] = {&polygon[0], &polygon[k], &polygon[k + 1]};
-                    // Only the polygon's outline counts as an edge for
-                    // wireframe; the fan's internal diagonals do not.
-                    std::uint8_t edges = 0b001;
-                    if (k + 1 == n - 1) edges |= 0b010;
-                    if (k == 1) edges |= 0b100;
-                    emitTriangle(fan, edges, info, ctx, out);
+            TriangleInfo meshInfo{};
+            meshInfo.material = materialBase + static_cast<std::uint32_t>(mesh.material);
+            meshInfo.twoSided = twoSided;
+            meshInfo.mirrored = mirrored;
+            meshInfo.blend = pass.sortTranslucent && material.alphaMode == AlphaMode::Blend;
+            meshInfo.needsLod =
+                mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
+                                material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
+            for (int chunk = 0; chunk < meshChunks; ++chunk) chunkBlends_[chunkCount + chunk] = meshInfo.blend;
+
+            pool_.parallelFor(meshChunks, [&](int chunk) {
+                TriangleInfo info = meshInfo;  // per-thread copy; tangentSign varies per triangle
+                std::vector<RasterTriangle>& out = chunks_[chunkCount + chunk];
+                out.clear();
+                const std::size_t begin = static_cast<std::size_t>(chunk) * kTrianglesPerChunk;
+                const std::size_t end = std::min(begin + kTrianglesPerChunk, triangleCount);
+
+                for (std::size_t tri = begin; tri < end; ++tri) {
+                    const std::uint32_t i0 = mesh.indices[tri * 3];
+                    const std::uint32_t i1 = mesh.indices[tri * 3 + 1];
+                    const std::uint32_t i2 = mesh.indices[tri * 3 + 2];
+
+                    // Trivial rejection: all three vertices outside one plane.
+                    const unsigned c0 = clipOutcode(clipVertices_[i0].position);
+                    const unsigned c1 = clipOutcode(clipVertices_[i1].position);
+                    const unsigned c2 = clipOutcode(clipVertices_[i2].position);
+                    if (c0 & c1 & c2) continue;
+
+                    info.tangentSign = mesh.vertices[i0].tangent.w;
+
+                    ClipVertex polygon[kMaxClipVertices];
+                    const ClipVertex* verts[3] = {&clipVertices_[i0], &clipVertices_[i1], &clipVertices_[i2]};
+
+                    if (flat) {
+                        // Flat shading: one normal - the true geometric
+                        // normal of the face - and one lighting evaluation
+                        // at its centre, copied to all three corners.
+                        const Vec3 p0 = worldPosition(mesh.vertices[i0]);
+                        const Vec3 p1 = worldPosition(mesh.vertices[i1]);
+                        const Vec3 p2 = worldPosition(mesh.vertices[i2]);
+                        Vec3 n = normalize(cross(p1 - p0, p2 - p0), worldNormal(mesh.vertices[i0]));
+                        if (mirrored) n = -n;
+                        const Vec3 centre = (p0 + p1 + p2) * (1.0f / 3.0f);
+                        const Vec3 toEye = normalize(pass.eye - centre);
+                        if (twoSided && dot(n, toEye) < 0.0f) n = -n;
+                        const Lighting l = blinnPhong(*pass.lighting, centre, n, toEye, material.roughness, false);
+                        for (int k = 0; k < 3; ++k) {
+                            polygon[k] = *verts[k];
+                            store(polygon[k].varyings + kDiffuse, l.diffuse);
+                            store(polygon[k].varyings + kSpecular, l.specular);
+                            verts[k] = &polygon[k];
+                        }
+                    }
+
+                    const unsigned crossed = c0 | c1 | c2;
+                    if (crossed == 0) {
+                        // Entirely inside the frustum - the common case.
+                        emitTriangle(verts, 0b111, info, ctx, out);
+                        continue;
+                    }
+
+                    // Straddles the frustum: clip, then triangulate the
+                    // resulting convex polygon as a fan around its first
+                    // vertex.
+                    if (!flat)
+                        for (int k = 0; k < 3; ++k) polygon[k] = *verts[k];
+                    const int n = clipPolygon(polygon, 3, crossed, ctx.varyingCount);
+                    for (int k = 1; k + 1 < n; ++k) {
+                        const ClipVertex* fan[3] = {&polygon[0], &polygon[k], &polygon[k + 1]};
+                        // Only the polygon's outline counts as an edge for
+                        // wireframe; the fan's internal diagonals do not.
+                        std::uint8_t edges = 0b001;
+                        if (k + 1 == n - 1) edges |= 0b010;
+                        if (k == 1) edges |= 0b100;
+                        emitTriangle(fan, edges, info, ctx, out);
+                    }
                 }
-            }
-        });
-        chunkCount += meshChunks;
-        stats.setupMs += msSince(t0);
+            });
+            chunkCount += meshChunks;
+            stats.setupMs += msSince(t0);
+        }
+        materialBase += static_cast<std::uint32_t>(model.materials.size());
     }
 
     // ------------------------------------------------------------------ binning
     // Record, for every tile, the triangles whose bounding box touches it.
     // Walking the chunks in order keeps the result deterministic regardless
     // of which thread produced which chunk.
-    auto t0 = std::chrono::steady_clock::now();
-    const int tilesX = (width + kTileSize - 1) / kTileSize;
-    const int tilesY = (height + kTileSize - 1) / kTileSize;
-    bins_.resize(static_cast<std::size_t>(tilesX) * tilesY);
+    const auto t0 = std::chrono::steady_clock::now();
+    binsX_ = (pass.width + kTileSize - 1) / kTileSize;
+    binsY_ = (pass.height + kTileSize - 1) / kTileSize;
+    bins_.resize(static_cast<std::size_t>(binsX_) * binsY_);
     for (auto& bin : bins_) bin.clear();
 
     const int tileShift = kSubpixelBits + 5;  // fixed point -> tile index (32 = 2^5)
     static_assert(kTileSize == 32, "tileShift assumes 32-pixel tiles");
+    auto binTriangle = [&](const RasterTriangle& tri) {
+        const int tx0 = std::min({tri.x[0], tri.x[1], tri.x[2]}) >> tileShift;
+        const int ty0 = std::min({tri.y[0], tri.y[1], tri.y[2]}) >> tileShift;
+        const int tx1 = std::min(std::max({tri.x[0], tri.x[1], tri.x[2]}) >> tileShift, binsX_ - 1);
+        const int ty1 = std::min(std::max({tri.y[0], tri.y[1], tri.y[2]}) >> tileShift, binsY_ - 1);
+        for (int ty = ty0; ty <= ty1; ++ty)
+            for (int tx = tx0; tx <= tx1; ++tx) bins_[static_cast<std::size_t>(ty) * binsX_ + tx].push_back(&tri);
+    };
+
+    // Opaque triangles first, in submission order: the depth buffer sorts
+    // them out. Translucent ones cannot rely on it - each must be blended
+    // over whatever is behind it - so they go last, furthest first (the
+    // "painter's algorithm").
+    blendOrder_.clear();
     for (std::size_t c = 0; c < chunkCount; ++c) {
         stats.trianglesDrawn += chunks_[c].size();
-        for (const RasterTriangle& tri : chunks_[c]) {
-            const int tx0 = std::min({tri.x[0], tri.x[1], tri.x[2]}) >> tileShift;
-            const int ty0 = std::min({tri.y[0], tri.y[1], tri.y[2]}) >> tileShift;
-            const int tx1 = std::min(std::max({tri.x[0], tri.x[1], tri.x[2]}) >> tileShift, tilesX - 1);
-            const int ty1 = std::min(std::max({tri.y[0], tri.y[1], tri.y[2]}) >> tileShift, tilesY - 1);
-            for (int ty = ty0; ty <= ty1; ++ty)
-                for (int tx = tx0; tx <= tx1; ++tx) bins_[static_cast<std::size_t>(ty) * tilesX + tx].push_back(&tri);
+        if (chunkBlends_[c]) {
+            for (const RasterTriangle& tri : chunks_[c]) blendOrder_.push_back(&tri);
+        } else {
+            for (const RasterTriangle& tri : chunks_[c]) binTriangle(tri);
         }
     }
+    if (!blendOrder_.empty()) {
+        std::stable_sort(blendOrder_.begin(), blendOrder_.end(), [](const RasterTriangle* a, const RasterTriangle* b) {
+            return a->z[0] + a->z[1] + a->z[2] > b->z[0] + b->z[1] + b->z[2];
+        });
+        for (const RasterTriangle* tri : blendOrder_) binTriangle(*tri);
+    }
     stats.setupMs += msSince(t0);
+}
 
-    // ------------------------------------------------------------ rasterization
-    t0 = std::chrono::steady_clock::now();
-    FragmentShader shader;
-    shader.model = &model;
-    shader.lights = lights;
-    shader.eye = camera.position;
-    shader.background = settings.background;
-    shader.background.a = 0;  // alpha 0 marks "no geometry here"
-    shader.lineWidth = std::max(static_cast<int>(std::lround(settings.wireWidth)), 1);
-    shader.perPixelLighting = phong;
-    shader.wireframe = settings.wireframe;
-    shader.textures = settings.textures;
-    shader.normalMaps = settings.normalMaps;
-
+template <typename Target, typename Shader, typename FinishTile>
+void Renderer::rasterize(Target& target, const Shader& shader, typename Target::Pixel clearColor, bool edges,
+                         int lineWidth, const FinishTile& finishTile) {
+    const int width = target.width(), height = target.height();
     pool_.parallelFor(static_cast<int>(bins_.size()), [&](int index) {
         TileRect tile;
-        tile.x0 = (index % tilesX) * kTileSize;
-        tile.y0 = (index / tilesX) * kTileSize;
+        tile.x0 = (index % binsX_) * kTileSize;
+        tile.y0 = (index / binsX_) * kTileSize;
         tile.x1 = std::min(tile.x0 + kTileSize, width);
         tile.y1 = std::min(tile.y0 + kTileSize, height);
 
         // Each tile clears its own pixels just before drawing into them,
         // while they are about to be in this thread's cache anyway.
         for (int y = tile.y0; y < tile.y1; ++y) {
-            std::fill(fb.colorRow(y) + tile.x0, fb.colorRow(y) + tile.x1, shader.background);
-            std::fill(fb.depthRow(y) + tile.x0, fb.depthRow(y) + tile.x1, 1.0f);
+            std::fill(target.colorRow(y) + tile.x0, target.colorRow(y) + tile.x1, clearColor);
+            std::fill(target.depthRow(y) + tile.x0, target.depthRow(y) + tile.x1, 1.0f);
         }
 
-        const auto& bin = bins_[index];
-        rasterizeTile(fb, tile, bin.data(), bin.size(), shader);
+        const auto& bin = bins_[static_cast<std::size_t>(index)];
+        rasterizeTile(target, tile, bin.data(), bin.size(), shader);
         // Lines go on after every triangle in the tile has written its depth.
-        if (shader.wireframe) rasterizeTileEdges(fb, tile, bin.data(), bin.size(), shader, shader.lineWidth);
+        if (edges) rasterizeTileEdges(target, tile, bin.data(), bin.size(), shader, lineWidth);
+        finishTile(tile);
+    });
+}
+
+void Renderer::renderShadowMap(std::span<const DrawItem> items, const Light& light, Vec3 center, float radius,
+                               const RenderSettings& settings, ShadowMap& map, RenderStats& stats) {
+    const int size = std::clamp(settings.shadowMapSize, 64, 2048);
+    map.target.resize(size, size);
+    aimShadowMap(map, light, center, radius);
+    map.kernel = std::clamp(settings.shadowSoftness, 1, 7);
+
+    GeometryPass pass;
+    pass.viewProjection = map.viewProjection;
+    pass.width = pass.height = size;
+    pass.layout = VaryingLayout::DepthOnly;
+    pass.cullBackfaces = settings.cullBackfaces;
+
+    // The shadow pass's triangle counts and timings are reported as one
+    // number, not mixed into the main view's.
+    RenderStats ignored;
+    buildGeometry(items, pass, ignored);
+    DepthShader shader{materials_.data()};
+    rasterize(map.target, shader, std::uint8_t{0}, false, 1, [](const TileRect&) {});
+    (void)stats;
+}
+
+RenderStats Renderer::render(const Model& model, const Camera& camera, const RenderSettings& settings,
+                             Framebuffer& fb) {
+    const DrawItem item{&model, Mat4::identity()};
+    return render(std::span<const DrawItem>(&item, 1), camera, settings, fb);
+}
+
+RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& camera, const RenderSettings& settings,
+                             Framebuffer& fb) {
+    RenderStats stats;
+    const int width = fb.width(), height = fb.height();
+    if (width <= 0 || height <= 0) return stats;
+
+    const bool flat = settings.shading == ShadingMode::Flat;
+    const bool perPixel = !flat && settings.shading != ShadingMode::Gouraud;
+
+    // One table of materials for the whole frame, so a triangle can name
+    // its material with a single index whichever model it came from.
+    materials_.clear();
+    for (const DrawItem& item : items)
+        for (const Material& material : item.model->materials)
+            materials_.push_back({&material, item.model->textures.data()});
+
+    // ------------------------------------------------------------------ lights
+    // Lighting is computed in world space; lights given relative to the
+    // camera are brought there first.
+    const Mat4 cameraToWorld = inverse(camera.view);
+    std::vector<Light> lights;
+    if (settings.lights.empty()) {
+        Light key;
+        key.direction = -settings.lightDirection;
+        key.color = {2.0f, 1.94f, 1.86f};
+        key.castsShadow = true;
+        key.cameraSpace = true;
+        Light fill;
+        fill.direction = {-0.8f, 0.1f, -0.4f};
+        fill.color = {0.25f, 0.3f, 0.4f};
+        fill.specular = 0.0f;
+        fill.cameraSpace = true;
+        lights = {key, fill};
+    } else {
+        lights = settings.lights;
+    }
+    for (Light& light : lights) {
+        if (light.cameraSpace) {
+            light.direction = transformDirection(cameraToWorld, light.direction);
+            light.position = transformPoint(cameraToWorld, light.position);
+        }
+        light.direction = normalize(light.direction, {0.0f, -1.0f, 0.0f});
+    }
+    const Environment* environment = settings.environment ? settings.environment : &defaultEnvironment();
+
+    // ----------------------------------------------------------------- shadows
+    std::vector<const ShadowMap*> shadows(lights.size(), nullptr);
+    if (settings.shadows && perPixel && !settings.wireframe) {
+        const auto t0 = std::chrono::steady_clock::now();
+        // A sphere around everything, for the lights to aim at.
+        Bounds bounds;
+        bool any = false;
+        for (const DrawItem& item : items) {
+            const Bounds b = item.model->bounds();
+            for (int corner = 0; corner < 8; ++corner) {
+                const Vec3 p = transformPoint(
+                    item.transform,
+                    {corner & 1 ? b.max.x : b.min.x, corner & 2 ? b.max.y : b.min.y, corner & 4 ? b.max.z : b.min.z});
+                bounds.min = any ? min(bounds.min, p) : p;
+                bounds.max = any ? max(bounds.max, p) : p;
+                any = true;
+            }
+        }
+        int used = 0;
+        for (std::size_t i = 0; i < lights.size() && used < kMaxShadowMaps; ++i) {
+            if (!lights[i].castsShadow || lights[i].type == LightType::Point) continue;
+            renderShadowMap(items, lights[i], bounds.center(), bounds.radius(), settings, shadowMaps_[used], stats);
+            shadows[i] = &shadowMaps_[used++];
+        }
+        if (used > 0) stats.shadowMs = msSince(t0);
+    }
+
+    shadingLights_.clear();
+    for (std::size_t i = 0; i < lights.size(); ++i) shadingLights_.push_back(prepareLight(lights[i], shadows[i]));
+    LightingContext lighting;
+    lighting.lights = shadingLights_.data();
+    lighting.lightCount = static_cast<int>(shadingLights_.size());
+    lighting.environment = environment;
+
+    // ---------------------------------------------------------------- geometry
+    GeometryPass pass;
+    pass.viewProjection = camera.projection * camera.view;
+    pass.eye = camera.position;
+    pass.width = width;
+    pass.height = height;
+    pass.layout = perPixel ? VaryingLayout::PerPixel : VaryingLayout::Lit;
+    pass.flat = flat;
+    pass.cullBackfaces = settings.cullBackfaces;
+    // In wireframe every surface is just a depth mask plus lines.
+    pass.sortTranslucent = !settings.wireframe;
+    pass.lighting = &lighting;
+    buildGeometry(items, pass, stats);
+
+    // ------------------------------------------------------------ rasterization
+    auto t0 = std::chrono::steady_clock::now();
+    const int lineWidth = std::max(static_cast<int>(std::lround(settings.wireWidth)), 1);
+    auto makeShader = [&](auto output) {
+        FragmentShader<decltype(output)> shader;
+        shader.output = output;
+        shader.materials = materials_.data();
+        shader.lighting = lighting;
+        shader.eye = camera.position;
+        shader.mode = settings.shading;
+        shader.lineWidth = lineWidth;
+        shader.perPixelLighting = perPixel;
+        shader.wireframe = settings.wireframe;
+        shader.textures = settings.textures;
+        shader.normalMaps = settings.normalMaps;
+        return shader;
+    };
+
+    Backdrop backdrop;
+    backdrop.color = settings.background;
+    backdrop.sky = settings.skybox ? environment : nullptr;
+    backdrop.skyBlur = settings.skyboxBlur;
+    const bool wholeFrame = PostProcessor::needsWholeFrame(settings.post, backdrop);
+
+    // Shading produces linear HDR colour, and the general route is to keep
+    // it that way in a float buffer so the post-processing passes can work
+    // on real light values. But a float buffer is four times the memory of
+    // an 8-bit one, and most frames need none of that: no whole-frame
+    // effect is on, and nothing is translucent (blending must happen in
+    // linear light, before tone mapping). Those frames skip the HDR buffer
+    // and tone map each pixel as it is shaded.
+    if (!wholeFrame && blendOrder_.empty()) {
+        Color8 empty = settings.background;
+        empty.a = 0;
+        const auto shader =
+            makeShader(DirectOutput{std::exp2(settings.post.exposure), settings.post.toneMapper, empty});
+        rasterize(fb, shader, empty, settings.wireframe, lineWidth, [](const TileRect&) {});
+        stats.rasterMs = msSince(t0);
+        return stats;
+    }
+
+    // Coverage 0 marks "no geometry here".
+    hdr_.resize(width, height);
+    const auto shader = makeShader(HdrOutput{});
+    rasterize(hdr_, shader, Vec4(0.0f), settings.wireframe, lineWidth, [&](const TileRect& tile) {
+        // With no whole-frame effects, all that is left to do to a tile is
+        // tone mapping; do it now, while its pixels are still in the cache.
+        if (!wholeFrame)
+            PostProcessor::presentRect(hdr_, settings.post, backdrop, fb, tile.x0, tile.y0, tile.x1, tile.y1);
     });
     stats.rasterMs = msSince(t0);
+
+    // --------------------------------------------------------- post-processing
+    if (wholeFrame) {
+        t0 = std::chrono::steady_clock::now();
+        post_.run(hdr_, camera, settings.post, backdrop, settings.pixelScale, fb);
+        stats.postMs = msSince(t0);
+    }
 
     return stats;
 }

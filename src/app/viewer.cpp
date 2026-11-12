@@ -38,13 +38,18 @@ const char* const kHelpLines[] = {
     "space                      auto-rotate on / off",
     "r                          reset the view",
     "",
-    "1  2  3                    flat / gouraud / phong shading",
+    "1  2  3  4  5              flat / gouraud / phong / pbr / toon",
     "s                          cycle shading modes",
     "w                          wireframe",
     "t                          textures on / off",
     "n                          normal maps on / off",
     "c                          back-face culling on / off",
     "[  ]                       turn the light",
+    "x                          shadows",
+    "e  y                       next environment, sky background",
+    "u  g  i  f                 occlusion, bloom, ink outlines, FXAA",
+    "z  {  }                    tone curve, exposure down / up",
+    "d                          next dithering mode",
     "",
     "a                          play / pause the animation",
     ",  .                       step one frame back / forward",
@@ -78,9 +83,30 @@ bool fileExists(const std::string& path) {
 
 }  // namespace
 
-Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool)
+Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
+               ThreadPool& pool)
     : options_(options), model_(model), player_(player), pool_(pool), renderer_(pool) {
     settings_ = makeRenderSettings(options);
+    settings_.skybox = wantsSkybox(options, environment);
+    lightYaw_ = radians(options.lightAngle);
+    dither_ = options.dither;
+    outlineAuto_ = !options.outline.has_value();
+
+    // The cycle starts on whatever was asked for. A built-in name selects
+    // that entry; a file is added to the end of the list.
+    for (const std::string& name : builtinEnvironmentNames()) {
+        Environment builtin;
+        makeBuiltinEnvironment(name, builtin);
+        builtin.intensity = environment.intensity;
+        builtin.rotation = environment.rotation;
+        if (name == environment.name) environment_ = environments_.size();
+        environments_.push_back(std::move(builtin));
+    }
+    if (environments_[environment_].name != environment.name) {
+        environment_ = environments_.size();
+        environments_.push_back(environment);
+    }
+
     camera_ = makeCamera(options, model);
     autoRotate_ = options.spin;
     showStats_ = options.stats;
@@ -88,7 +114,7 @@ Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, Th
 
 void Viewer::resetView() {
     camera_ = makeCamera(options_, model_);
-    lightYaw_ = 0.0f;
+    lightYaw_ = radians(options_.lightAngle);
     dirty_ = true;
 }
 
@@ -117,6 +143,7 @@ void Viewer::rebuildBackend() {
         terminal_.write(out);
     }
     backend_ = makeBackend(effectiveBackend(), caps_.color);
+    backend_->setDither(dither_);
     layout();
 }
 
@@ -151,19 +178,20 @@ void Viewer::drawFrame() {
     // Move the animation clock on, and re-skin the model if that changed the pose.
     if (player_ && player_->advance(static_cast<float>(dt))) applyPose(model_, player_->pose(), &pool_);
 
-    RenderSettings settings = settings_;
+    RenderSettings settings = frameSettings();
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
     // Lines need to survive the supersampling resolve, so scale them with it.
     settings.wireWidth = static_cast<float>(supersampling_);
-    settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
+    settings.pixelScale = static_cast<float>(supersampling_);
 
     const float aspect = static_cast<float>(imageWidth_) * backend_->pixelAspect() / static_cast<float>(imageHeight_);
     stats_ = renderer_.render(model_, camera_.camera(aspect), settings, framebuffer_);
 
     const auto presentStart = Clock::now();
     ImageView view = viewOf(framebuffer_);
-    if (supersampling_ > 1) {
+    if (supersampling_ > 1 || settings.post.fxaa) {
         resolve(framebuffer_, supersampling_, resolved_, pool_);
+        if (settings.post.fxaa) applyFxaa(resolved_, pool_);
         view = resolved_.view();
     }
 
@@ -209,8 +237,7 @@ void Viewer::drawStatusBar(std::string& out) {
         if (autoRotate_ || dragging_ || (player_ && player_->playing()))
             std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
         else std::snprintf(fps, sizeof(fps), "idle");
-        std::snprintf(timing, sizeof(timing), "render %.1f ms, present %.1f ms",
-                      stats_.vertexMs + stats_.setupMs + stats_.rasterMs, presentMs_);
+        std::snprintf(timing, sizeof(timing), "render %.1f ms, present %.1f ms", stats_.totalMs(), presentMs_);
 
         // The timeline: clip name, position and playback state.
         std::string clip, clipShort;
@@ -285,9 +312,7 @@ void Viewer::saveScreenshot() {
     target.width = std::clamp(static_cast<int>(1200.0f * aspect), 320, 4096);
     target.supersampling = 2;
 
-    RenderSettings settings = settings_;
-    settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
-    const Image image = renderOffscreen(renderer_, pool_, model_, camera_, settings, target);
+    const Image image = renderOffscreen(renderer_, pool_, model_, camera_, frameSettings(), target);
 
     // termesh-<model>-01.png, -02.png, ... - never overwrite.
     std::string stem = model_.name;
@@ -375,8 +400,11 @@ void Viewer::handleKey(const KeyEvent& key) {
                 case U'1': settings_.shading = ShadingMode::Flat; break;
                 case U'2': settings_.shading = ShadingMode::Gouraud; break;
                 case U'3': settings_.shading = ShadingMode::Phong; break;
+                case U'4': settings_.shading = ShadingMode::Pbr; break;
+                case U'5': settings_.shading = ShadingMode::Toon; break;
                 case U's':
-                    settings_.shading = static_cast<ShadingMode>((static_cast<int>(settings_.shading) + 1) % 3);
+                    settings_.shading =
+                        static_cast<ShadingMode>((static_cast<int>(settings_.shading) + 1) % kShadingModeCount);
                     break;
                 case U'w': settings_.wireframe = !settings_.wireframe; break;
                 case U't': settings_.textures = !settings_.textures; break;
@@ -404,7 +432,7 @@ void Viewer::handleKey(const KeyEvent& key) {
                     helpDrawn_ = false;
                     return;
                 default:
-                    if (!handleAnimationKey(ch)) return;  // unbound key: nothing changed
+                    if (!handleAnimationKey(ch) && !handleEffectKey(ch)) return;  // unbound key: nothing changed
                     break;
             }
             break;
@@ -413,6 +441,78 @@ void Viewer::handleKey(const KeyEvent& key) {
 
     if (effectiveBackend() != before) rebuildBackend();
     dirty_ = true;
+}
+
+// The settings for the frame about to be drawn: what the user has chosen,
+// plus the things that follow from it.
+RenderSettings Viewer::frameSettings() const {
+    RenderSettings settings = settings_;
+    settings.lightDirection = transformDirection(rotate({0.0f, 1.0f, 0.0f}, lightYaw_), settings_.lightDirection);
+    settings.environment = &environments_[environment_];
+    if (outlineAuto_) settings.post.outline = settings_.shading == ShadingMode::Toon;
+    return settings;
+}
+
+// Lighting and post-processing toggles.
+bool Viewer::handleEffectKey(char32_t ch) {
+    auto onOff = [&](const char* what, bool on) { notify(std::string(what) + (on ? " on" : " off")); };
+    PostSettings& post = settings_.post;
+    switch (ch) {
+        case U'x':
+            settings_.shadows = !settings_.shadows;
+            if (settings_.shadows &&
+                (settings_.shading == ShadingMode::Flat || settings_.shading == ShadingMode::Gouraud))
+                notify("shadows need phong, pbr or toon shading");
+            else onOff("shadows", settings_.shadows);
+            break;
+        case U'e':
+            environment_ = (environment_ + 1) % environments_.size();
+            // A panorama is worth looking at; the studio is just two colours.
+            settings_.skybox = options_.skybox.value_or(environments_[environment_].hasMap());
+            notify("environment: " + environments_[environment_].name);
+            break;
+        case U'y':
+            settings_.skybox = !settings_.skybox;
+            onOff("sky background", settings_.skybox);
+            break;
+        case U'u':
+            post.ssao = !post.ssao;
+            onOff("ambient occlusion", post.ssao);
+            break;
+        case U'g':
+            post.bloom = !post.bloom;
+            onOff("bloom", post.bloom);
+            break;
+        case U'i':
+            // From here on the choice is the user's, whatever the shading mode.
+            post.outline = outlineAuto_ ? settings_.shading != ShadingMode::Toon : !post.outline;
+            outlineAuto_ = false;
+            onOff("outlines", post.outline);
+            break;
+        case U'f':
+            post.fxaa = !post.fxaa;
+            onOff("FXAA", post.fxaa);
+            break;
+        case U'd':
+            dither_ = static_cast<DitherMode>((static_cast<int>(dither_) + 1) % 4);
+            backend_->setDither(dither_);
+            notify(std::string("dithering: ") + ditherModeName(dither_));
+            break;
+        case U'z':
+            post.toneMapper = static_cast<ToneMapper>((static_cast<int>(post.toneMapper) + 1) % 4);
+            notify(std::string("tone curve: ") + toneMapperName(post.toneMapper));
+            break;
+        case U'{':
+        case U'}': {
+            post.exposure = std::clamp(post.exposure + (ch == U'}' ? 0.5f : -0.5f), -8.0f, 8.0f);
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "exposure %+.1f stops", post.exposure);
+            notify(buf);
+            break;
+        }
+        default: return false;
+    }
+    return true;
 }
 
 // Timeline controls. Anything that moves the clock by hand re-poses the model
