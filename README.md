@@ -19,12 +19,16 @@ Textured, lit, depth-buffered 3D from a software rasterizer written from scratch
 
 <br>
 
+<p>
 <img src="docs/media/hero.gif" alt="A textured flight helmet model spinning in a terminal, drawn with half-block characters" width="748">
+</p>
 
+<p>
 <sub>
 <code>termesh FlightHelmet.gltf</code> · 94,722 triangles, drawn with half-block characters.<br>
 This is the program's real terminal output, captured and replayed frame by frame.
 </sub>
+</p>
 
 </div>
 
@@ -185,7 +189,7 @@ termesh model.glb --print --cols 60
 In the viewer, <kbd>p</kbd> saves the current view as `termesh-<model>-NN.png`. PNG encoding uses
 stb_image_write; the GIF encoder (median-cut palette, LZW, inter-frame deltas) is part of termesh.
 
-## 🖼️ Output backends
+## 📺 Output backends
 
 termesh asks the terminal what it supports at start-up and picks the best option. Press <kbd>b</kbd> to step
 through the others.
