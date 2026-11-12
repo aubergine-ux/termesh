@@ -1,7 +1,9 @@
 #include "scene/primitives.hpp"
 
+#include <algorithm>
 #include <cmath>
 
+#include "anim/skinning.hpp"
 #include "core/color.hpp"
 
 namespace termesh {
@@ -74,7 +76,7 @@ Model makeCube() {
     model.meshes.push_back(std::move(mesh));
 
     model.textures.push_back(makeGridTexture(256, 4, {0.9f, 0.45f, 0.1f}, {0.95f, 0.85f, 0.7f}));
-    model.textures.push_back(makeStudNormalMap(256, 4));
+    model.textures.push_back(makeStudNormalMap(256, 2));
     Material m;
     m.name = "crate";
     m.baseColorTexture = 0;
@@ -177,15 +179,134 @@ Model makeKnot() {
     return model;
 }
 
+// An animated demo: a tapering tube with a chain of bones up its middle and
+// two clips, so skinning, playback and cross-fading can be tried without any
+// files. It is built the way a loader would build it - rest shape, bone
+// weights, inverse bind matrices, keyframes - and then posed.
+Model makeTentacle() {
+    constexpr int kBones = 8, kRings = 64, kSides = 24;
+    constexpr float kBoneLength = 0.5f, kHeight = kBones * kBoneLength;
+
+    Model model;
+    model.name = "tentacle";
+
+    // Bones 0..7 form a chain along +y; the last node carries the mesh.
+    Rig& rig = model.rig;
+    rig.nodes.resize(kBones + 1);
+    for (int i = 0; i < kBones; ++i) {
+        rig.nodes[i].name = "bone " + std::to_string(i);
+        rig.nodes[i].parent = i - 1;
+        if (i > 0) rig.nodes[i].rest.translation = {0.0f, kBoneLength, 0.0f};
+        rig.order.push_back(i);
+    }
+    rig.nodes[kBones].name = "tentacle";
+    rig.order.push_back(kBones);
+
+    // Each bone's inverse bind matrix undoes its rest position: bone i
+    // starts i bone-lengths up the tube.
+    Skin skin;
+    for (int i = 0; i < kBones; ++i) {
+        skin.joints.push_back(i);
+        skin.inverseBind.push_back(translate({0.0f, -kBoneLength * static_cast<float>(i), 0.0f}));
+    }
+    rig.skins.push_back(std::move(skin));
+
+    Mesh mesh;
+    mesh.hasUVs = true;
+    mesh.rig.node = kBones;
+    mesh.rig.skin = 0;
+    for (int i = 0; i <= kRings; ++i) {
+        const float v = static_cast<float>(i) / kRings;
+        const float y = v * kHeight;
+        const float radius = 0.42f * (1.0f - v) + 0.03f;
+        // A ring between two bones is shared between them in proportion to
+        // how close it is to each, which is what makes the bend smooth.
+        const float f = std::min(y / kBoneLength, static_cast<float>(kBones) - 1e-3f);
+        const int bone = static_cast<int>(f);
+        const float blend = bone + 1 < kBones ? f - static_cast<float>(bone) : 0.0f;
+        for (int j = 0; j <= kSides; ++j) {
+            const float a = static_cast<float>(j) / kSides * 2.0f * kPi;
+            Vertex vert;
+            // The slope of the taper tilts the normal slightly upwards.
+            vert.normal = normalize(Vec3{std::cos(a), 0.42f / kHeight, std::sin(a)});
+            vert.position = {std::cos(a) * radius, y, std::sin(a) * radius};
+            vert.uv = {static_cast<float>(j) / kSides * 2.0f, (1.0f - v) * 4.0f};
+            mesh.vertices.push_back(vert);
+            mesh.rig.joints.push_back(
+                {static_cast<std::uint16_t>(bone), static_cast<std::uint16_t>(std::min(bone + 1, kBones - 1)), 0, 0});
+            mesh.rig.weights.push_back({1.0f - blend, blend, 0.0f, 0.0f});
+        }
+    }
+    for (int i = 0; i < kRings; ++i)
+        for (int j = 0; j < kSides; ++j) {
+            const auto a = static_cast<std::uint32_t>(i * (kSides + 1) + j);
+            const auto b = a + static_cast<std::uint32_t>(kSides + 1);
+            for (std::uint32_t idx : {a, b, a + 1, a + 1, b, b + 1}) mesh.indices.push_back(idx);
+        }
+    computeTangents(mesh);
+    for (const Vertex& v : mesh.vertices) {
+        mesh.rig.positions.push_back(v.position);
+        mesh.rig.normals.push_back(v.normal);
+        mesh.rig.tangents.push_back(v.tangent.xyz());
+    }
+    model.meshes.push_back(std::move(mesh));
+
+    // Keyframes. Both clips end on the pose they started with, so they loop.
+    auto makeClip = [&](const char* name, float duration, Vec3 axis, auto angleAt) {
+        constexpr int kKeys = 32;
+        Animation clip;
+        clip.name = name;
+        clip.duration = duration;
+        for (int bone = 0; bone < kBones; ++bone) {
+            AnimationChannel channel;
+            channel.node = bone;
+            channel.path = AnimationPath::Rotation;
+            channel.interpolation = Interpolation::Linear;
+            channel.components = 4;
+            for (int k = 0; k <= kKeys; ++k) {
+                const float phase = static_cast<float>(k) / kKeys;
+                const Quat q = Quat::fromAxisAngle(axis, angleAt(bone, phase));
+                channel.times.push_back(phase * duration);
+                channel.values.insert(channel.values.end(), {q.x, q.y, q.z, q.w});
+            }
+            clip.channels.push_back(std::move(channel));
+        }
+        return clip;
+    };
+    // A wave travelling up the tube: every bone swings like the one below
+    // it, a little later.
+    rig.animations.push_back(makeClip("wave", 2.4f, {0.0f, 0.0f, 1.0f}, [](int bone, float phase) {
+        return 0.28f * std::sin(2.0f * kPi * phase - 0.7f * static_cast<float>(bone));
+    }));
+    // Curl up and straighten out again.
+    rig.animations.push_back(makeClip("curl", 3.0f, {1.0f, 0.0f, 0.0f}, [](int bone, float phase) {
+        return bone == 0 ? 0.0f : 0.55f * 0.5f * (1.0f - std::cos(2.0f * kPi * phase));
+    }));
+
+    model.textures.push_back(makeGridTexture(256, 2, {0.15f, 0.55f, 0.5f}, {0.95f, 0.85f, 0.6f}));
+    model.textures.push_back(makeStudNormalMap(256, 2));
+    Material m;
+    m.name = "tentacle";
+    m.baseColorTexture = 0;
+    m.normalTexture = 1;
+    m.roughness = 0.35f;
+    m.doubleSided = true;  // the tube is open at the bottom
+    model.materials.push_back(m);
+
+    model.motionBounds = computeMotionBounds(model);
+    return model;
+}
+
 }  // namespace
 
-std::vector<std::string> demoModelNames() { return {"knot", "cube", "sphere"}; }
+std::vector<std::string> demoModelNames() { return {"knot", "cube", "sphere", "tentacle"}; }
 
 Model makeDemoModel(const std::string& name) {
     Model model;
     if (name == "cube") model = makeCube();
     else if (name == "sphere") model = makeSphere();
     else if (name == "knot") model = makeKnot();
+    else if (name == "tentacle") model = makeTentacle();
     finalizeModel(model);
     return model;
 }

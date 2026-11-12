@@ -1,12 +1,16 @@
 // termesh - a 3D model viewer for the terminal.
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
+#include "anim/player.hpp"
+#include "anim/skinning.hpp"
 #include "app/viewer.hpp"
 #include "export/gif.hpp"
 #include "export/offscreen.hpp"
@@ -40,8 +44,10 @@ int runPng(const Options& options, const Model& model, ThreadPool& pool) {
     return 0;
 }
 
-// --gif: a full turn of the model as a looping animation.
-int runGif(const Options& options, const Model& model, ThreadPool& pool) {
+// --gif: a looping animation. For a static model that is a full turn of the
+// camera; for an animated one it is one loop of the clip, seen from a fixed
+// camera unless --spin asks for the turn as well.
+int runGif(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool) {
     Renderer renderer(pool);
     OffscreenTarget target;
     target.width = options.width > 0 ? options.width : 480;
@@ -54,16 +60,34 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
     const float startYaw = camera.yaw;
     // Spin the same way as the interactive viewer; a negative speed reverses.
     const float direction = options.spinSpeed < 0.0f ? -1.0f : 1.0f;
+    const bool spin = !player || options.spinExplicit;
+
+    // By default an animated GIF lasts exactly one loop of the clip, so that
+    // it repeats seamlessly.
+    const float rate = player ? std::abs(player->speed()) : 0.0f;
+    const float startTime = player ? player->time() : 0.0f;
+    int frameCount = options.frames;
+    if (frameCount <= 0) {
+        frameCount = 72;
+        if (player && player->duration() > 0.0f && rate > 0.0f)
+            frameCount = std::clamp(
+                static_cast<int>(std::lround(player->duration() / rate * static_cast<float>(options.gifFps))), 2, 2000);
+    }
 
     const bool progress = Terminal::errorIsTerminal();
     std::vector<Image> frames;
-    frames.reserve(static_cast<std::size_t>(options.frames));
-    for (int i = 0; i < options.frames; ++i) {
+    frames.reserve(static_cast<std::size_t>(frameCount));
+    for (int i = 0; i < frameCount; ++i) {
         // The last frame stops one step short of a full turn, so the loop
         // joins up without a repeated frame.
-        camera.yaw = startYaw + direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(options.frames);
+        if (spin)
+            camera.yaw = startYaw + direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(frameCount);
+        if (player) {
+            player->seek(startTime + player->speed() * static_cast<float>(i) / static_cast<float>(options.gifFps));
+            applyPose(model, player->pose(), &pool);
+        }
         frames.push_back(renderOffscreen(renderer, pool, model, camera, settings, target));
-        if (progress) std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, options.frames);
+        if (progress) std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, frameCount);
     }
 
     if (progress) std::fprintf(stderr, "\rencoding...                 \r");
@@ -79,7 +103,7 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
         return 1;
     }
     std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width, frames[0].height,
-                 options.frames);
+                 frameCount);
     return 0;
 }
 
@@ -136,7 +160,7 @@ int runPrint(const Options& options, const Model& model, ThreadPool& pool) {
 }
 
 // --bench: time the renderer alone, with no terminal in the way.
-int runBench(const Options& options, const Model& model, ThreadPool& pool) {
+int runBench(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool) {
     Renderer renderer(pool);
     const int width = options.width > 0 ? options.width : 640;
     const int height = options.height > 0 ? options.height : 360;
@@ -149,9 +173,17 @@ int runBench(const Options& options, const Model& model, ThreadPool& pool) {
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
     RenderStats total;
+    double poseMs = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < options.benchFrames; ++i) {
         camera.yaw += radians(2.0f);
+        if (player) {
+            // A fixed time step, so every run poses the same frames.
+            const auto poseStart = std::chrono::steady_clock::now();
+            player->advance(1.0f / 60.0f);
+            applyPose(model, player->pose(), &pool);
+            poseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - poseStart).count();
+        }
         const RenderStats s = renderer.render(model, camera.camera(aspect), settings, fb);
         resolve(fb, ssaa, image, pool);
         total.vertexMs += s.vertexMs;
@@ -172,6 +204,9 @@ int runBench(const Options& options, const Model& model, ThreadPool& pool) {
     std::printf("per frame    vertex %.2f ms, setup %.2f ms, raster %.2f ms, %.0f triangles drawn\n",
                 total.vertexMs / n, total.setupMs / n, total.rasterMs / n,
                 static_cast<double>(total.trianglesDrawn) / n);
+    if (player)
+        std::printf("animation    %s: pose + skinning %.2f ms per frame\n", player->clipName(player->clip()).c_str(),
+                    poseMs / n);
     return 0;
 }
 
@@ -211,18 +246,49 @@ int main(int argc, char** argv) {
         model = std::move(loaded.model);
     }
 
+    if (options.listAnimations) {
+        if (!model.animated()) std::printf("%s has no animations\n", model.name.c_str());
+        for (std::size_t i = 0; i < model.rig.animations.size(); ++i) {
+            const Animation& animation = model.rig.animations[i];
+            std::printf("%2zu  %-24s %6.2f s  %zu channels\n", i + 1,
+                        animation.name.empty() ? "(unnamed)" : animation.name.c_str(), animation.duration,
+                        animation.channels.size());
+        }
+        return 0;
+    }
+
     ThreadPool pool(static_cast<unsigned>(options.threads));
 
-    if (options.benchFrames > 0) return runBench(options, model, pool);
+    // Animated models get a player, positioned where the options ask.
+    std::optional<AnimationPlayer> playerStorage;
+    AnimationPlayer* player = nullptr;
+    if (model.animated()) {
+        const int clip = findAnimation(model, options.animation);
+        if (clip < 0) {
+            std::fprintf(stderr, "termesh: no animation '%s' in %s (try --list-animations)\n",
+                         options.animation.c_str(), model.name.c_str());
+            return 2;
+        }
+        player = &playerStorage.emplace(model.rig);
+        player->setClip(clip);
+        player->setSpeed(options.animationSpeed);
+        player->seek(options.animationTime);
+        if (options.animationPaused) player->pause();
+        applyPose(model, player->pose(), &pool);
+    } else if (!options.animation.empty()) {
+        std::fprintf(stderr, "termesh: warning: %s has no animations; --animation ignored\n", model.name.c_str());
+    }
+
+    if (options.benchFrames > 0) return runBench(options, model, player, pool);
     // --png and --gif can be combined: one run writes both.
     if (!options.pngPath.empty() || !options.gifPath.empty()) {
         int status = 0;
         if (!options.pngPath.empty()) status = runPng(options, model, pool);
-        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, pool);
+        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, player, pool);
         return status;
     }
     if (options.print) return runPrint(options, model, pool);
 
-    Viewer viewer(options, model, pool);
+    Viewer viewer(options, model, player, pool);
     return viewer.run();
 }

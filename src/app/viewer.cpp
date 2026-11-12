@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 
+#include "anim/skinning.hpp"
 #include "export/offscreen.hpp"
 #include "pipeline/resolve.hpp"
 
@@ -44,6 +46,11 @@ const char* const kHelpLines[] = {
     "c                          back-face culling on / off",
     "[  ]                       turn the light",
     "",
+    "a                          play / pause the animation",
+    ",  .                       step one frame back / forward",
+    "<  >                       slower / faster",
+    "m  M                       next / previous animation",
+    "",
     "b                          next output backend",
     "o                          status bar on / off",
     "p                          save a PNG of the view",
@@ -71,8 +78,8 @@ bool fileExists(const std::string& path) {
 
 }  // namespace
 
-Viewer::Viewer(const Options& options, const Model& model, ThreadPool& pool)
-    : options_(options), model_(model), pool_(pool), renderer_(pool) {
+Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool)
+    : options_(options), model_(model), player_(player), pool_(pool), renderer_(pool) {
     settings_ = makeRenderSettings(options);
     camera_ = makeCamera(options, model);
     autoRotate_ = options.spin;
@@ -141,6 +148,8 @@ void Viewer::drawFrame() {
     const double dt = std::min(std::chrono::duration<double>(now - lastFrameTime_).count(), 0.1);
     lastFrameTime_ = now;
     if (autoRotate_ && !dragging_) camera_.yaw += radians(options_.spinSpeed) * static_cast<float>(dt);
+    // Move the animation clock on, and re-skin the model if that changed the pose.
+    if (player_ && player_->advance(static_cast<float>(dt))) applyPose(model_, player_->pose(), &pool_);
 
     RenderSettings settings = settings_;
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
@@ -190,23 +199,44 @@ void Viewer::drawStatusBar(std::string& out) {
     } else {
         const std::string shading = std::string(shadingModeName(settings_.shading)) +
                                     ((settings_.wireframe || backend_->wantsWireframe()) ? " wire" : "") +
-                                    (settings_.textures ? "" : " notex") + (autoRotate_ ? "" : " paused");
+                                    (settings_.textures ? "" : " notex") +
+                                    // For an animated model "paused" belongs to the timeline below.
+                                    (autoRotate_ || player_ ? "" : " paused");
         const std::string target = std::string(backendName(backend_->kind())) + " " + std::to_string(imageWidth_) +
                                    "x" + std::to_string(imageHeight_);
         char fps[32], timing[96];
         // Nothing is drawn while nothing moves, so a rate would be meaningless.
-        if (autoRotate_ || dragging_) std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
+        if (autoRotate_ || dragging_ || (player_ && player_->playing()))
+            std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
         else std::snprintf(fps, sizeof(fps), "idle");
         std::snprintf(timing, sizeof(timing), "render %.1f ms, present %.1f ms",
                       stats_.vertexMs + stats_.setupMs + stats_.rasterMs, presentMs_);
 
+        // The timeline: clip name, position and playback state.
+        std::string clip, clipShort;
+        if (player_) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "%.1f/%.1fs", player_->time(), player_->duration());
+            clipShort = buf;
+            if (!player_->playing()) clipShort += " paused";
+            else if (player_->speed() != 1.0f) {
+                std::snprintf(buf, sizeof(buf), " x%g", player_->speed());
+                clipShort += buf;
+            }
+            clip = " | " + player_->clipName(player_->clip()) + " " + clipShort;
+            if (player_->clipCount() > 1)
+                clip += " (" + std::to_string(player_->clip() + 1) + "/" + std::to_string(player_->clipCount()) + ")";
+            clipShort = " | " + clipShort;
+        }
+
         const std::string name = " " + model_.name;
         const std::string tris = formatCount(model_.triangleCount()) + " tris";
         const std::string candidates[] = {
-            name + " | " + tris + " | " + shading + " | " + target +
+            name + " | " + tris + " | " + shading + clip + " | " + target +
                 (supersampling_ > 1 ? " ssaa" + std::to_string(supersampling_) : "") + " | " + fps + " | " + timing,
-            name + " | " + tris + " | " + shading + " | " + target + " | " + fps,
-            name + " | " + shading + " | " + fps,
+            name + " | " + tris + " | " + shading + clip + " | " + target + " | " + fps,
+            name + " | " + shading + clip + " | " + fps,
+            name + clipShort + " | " + fps,
             std::string(" ") + fps,
         };
         for (const std::string& candidate : candidates) {
@@ -373,7 +403,9 @@ void Viewer::handleKey(const KeyEvent& key) {
                     showHelp_ = true;
                     helpDrawn_ = false;
                     return;
-                default: return;  // unbound key: nothing changed
+                default:
+                    if (!handleAnimationKey(ch)) return;  // unbound key: nothing changed
+                    break;
             }
             break;
         default: return;
@@ -381,6 +413,57 @@ void Viewer::handleKey(const KeyEvent& key) {
 
     if (effectiveBackend() != before) rebuildBackend();
     dirty_ = true;
+}
+
+// Timeline controls. Anything that moves the clock by hand re-poses the model
+// straight away, so it works while paused too.
+bool Viewer::handleAnimationKey(char32_t ch) {
+    if (ch != U'a' && ch != U',' && ch != U'.' && ch != U'<' && ch != U'>' && ch != U'm' && ch != U'M') return false;
+    if (!player_) {
+        notify("this model has no animations");
+        return true;
+    }
+    constexpr float kStep = 1.0f / 30.0f;  // one "frame" when scrubbing
+    constexpr float kSpeeds[] = {-2.0f, -1.0f, -0.5f, 0.1f, 0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 4.0f};
+
+    switch (ch) {
+        case U'a':
+            if (player_->playing()) player_->pause();
+            else player_->play();
+            lastFrameTime_ = Clock::now();  // do not jump by the time spent paused
+            break;
+        case U',':
+        case U'.':
+            player_->pause();
+            player_->seek(player_->time() + (ch == U'.' ? kStep : -kStep));
+            break;
+        case U'<':
+        case U'>': {
+            // Step to the neighbouring entry of the speed table.
+            int index = 0;
+            for (int i = 0; i < static_cast<int>(std::size(kSpeeds)); ++i)
+                if (std::abs(kSpeeds[i] - player_->speed()) < std::abs(kSpeeds[index] - player_->speed())) index = i;
+            index = std::clamp(index + (ch == U'>' ? 1 : -1), 0, static_cast<int>(std::size(kSpeeds)) - 1);
+            player_->setSpeed(kSpeeds[index]);
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "animation speed x%g", kSpeeds[index]);
+            notify(buf);
+            break;
+        }
+        default: {  // m, M
+            if (player_->clipCount() < 2) {
+                notify("this model has only one animation");
+                return true;
+            }
+            const int count = player_->clipCount();
+            const int next = (player_->clip() + (ch == U'm' ? 1 : count - 1)) % count;
+            player_->setClip(next, 0.3f);  // cross-fade rather than snap
+            notify("animation: " + player_->clipName(next));
+            break;
+        }
+    }
+    applyPose(model_, player_->pose(), &pool_);
+    return true;
 }
 
 void Viewer::handleMouse(const MouseEvent& mouse) {
@@ -468,7 +551,8 @@ int Viewer::run() {
     std::vector<InputEvent> events;
 
     while (running_ && !Terminal::quitRequested()) {
-        const bool animating = autoRotate_ && !dragging_ && !showHelp_;
+        const bool playing = player_ && (player_->playing() || player_->fading());
+        const bool animating = ((autoRotate_ && !dragging_) || playing) && !showHelp_;
         const auto nextFrame = lastFrameTime_ + frameInterval;
 
         // Sleep in read(): until the next frame is due if something is

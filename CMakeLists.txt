@@ -53,6 +53,9 @@ else()
 endif()
 
 add_library(termesh_core STATIC
+    src/anim/player.cpp
+    src/anim/pose.cpp
+    src/anim/skinning.cpp
     src/app/capabilities.cpp
     src/app/options.cpp
     src/app/viewer.cpp
@@ -97,6 +100,7 @@ if(TERMESH_BUILD_TESTS)
     enable_testing()
     add_executable(termesh_tests
         tests/test_main.cpp
+        tests/test_anim.cpp
         tests/test_app.cpp
         tests/test_clip.cpp
         tests/test_input.cpp

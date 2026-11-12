@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "anim/player.hpp"
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
 #include "core/image.hpp"
@@ -20,7 +21,8 @@ namespace termesh {
 
 class Viewer {
 public:
-    Viewer(const Options& options, const Model& model, ThreadPool& pool);
+    // `player` drives the model's animation; null for a static model.
+    Viewer(const Options& options, Model& model, AnimationPlayer* player, ThreadPool& pool);
 
     // Runs until the user quits. Returns the process exit code.
     int run();
@@ -32,6 +34,7 @@ private:
     void handleEvent(const InputEvent& event);
     void handleKey(const KeyEvent& key);
     void handleMouse(const MouseEvent& mouse);
+    bool handleAnimationKey(char32_t ch);  // true if the key was an animation control
 
     // --- output ---
     BackendKind effectiveBackend() const;
@@ -45,7 +48,8 @@ private:
     void notify(std::string message);
 
     const Options& options_;
-    const Model& model_;
+    Model& model_;
+    AnimationPlayer* player_;
     ThreadPool& pool_;
     Renderer renderer_;
 

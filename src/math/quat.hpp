@@ -69,6 +69,33 @@ constexpr Mat4 toMat4(Quat q) {
     };
 }
 
+// The rotation part of a matrix as a quaternion. The upper-left 3x3 must be
+// a pure rotation (orthonormal columns, no scale or mirroring).
+//
+// Each diagonal entry of a rotation matrix mixes the squares of the
+// quaternion's components, so the trace gives 4w^2 - 1 directly. When w is
+// small that loses precision, so the largest of x, y, z is solved for first
+// instead and the other three follow from the off-diagonal sums.
+inline Quat quatFromMat4(const Mat4& m) {
+    const float m00 = m(0, 0), m11 = m(1, 1), m22 = m(2, 2);
+    const float trace = m00 + m11 + m22;
+    Quat q;
+    if (trace > 0.0f) {
+        const float s = std::sqrt(trace + 1.0f) * 2.0f;  // 4w
+        q = {(m(2, 1) - m(1, 2)) / s, (m(0, 2) - m(2, 0)) / s, (m(1, 0) - m(0, 1)) / s, 0.25f * s};
+    } else if (m00 > m11 && m00 > m22) {
+        const float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;  // 4x
+        q = {0.25f * s, (m(0, 1) + m(1, 0)) / s, (m(0, 2) + m(2, 0)) / s, (m(2, 1) - m(1, 2)) / s};
+    } else if (m11 > m22) {
+        const float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;  // 4y
+        q = {(m(0, 1) + m(1, 0)) / s, 0.25f * s, (m(1, 2) + m(2, 1)) / s, (m(0, 2) - m(2, 0)) / s};
+    } else {
+        const float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;  // 4z
+        q = {(m(0, 2) + m(2, 0)) / s, (m(1, 2) + m(2, 1)) / s, 0.25f * s, (m(1, 0) - m(0, 1)) / s};
+    }
+    return normalize(q);
+}
+
 // Spherical linear interpolation: constant angular velocity from a to b.
 inline Quat slerp(Quat a, Quat b, float t) {
     float cosTheta = dot(a, b);

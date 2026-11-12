@@ -18,6 +18,7 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [8. Resolve](#8-resolve)
 - [9. Terminal output](#9-terminal-output)
 - [10. Input and the frame loop](#10-input-and-the-frame-loop)
+- [11. Animation](#11-animation)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -26,6 +27,7 @@ interpolation, the fill rule) carry long comments in the code itself.
 ```
  model.glb ─► loader ─► Model (world-space meshes, materials, textures)
                           │
+                          │  ◄── animation: pose ─► skinning rewrites the vertices (§11)
             ┌─────────────┴──────────────── Renderer::render ────────────────┐
             │                                                                │
             │  vertex stage      positions ─► clip space, build varyings     │  parallel
@@ -52,7 +54,8 @@ C++ operating on arrays of floats and bytes.
 | ---------------- | -------------------------------------------------------------------------------- |
 | `src/math/`      | `Vec2/3/4`, `Mat4`, `Quat`. Header-only, no dependencies.                        |
 | `src/core/`      | Framebuffer, images, textures (mipmaps, filtering), colour space, thread pool.   |
-| `src/scene/`     | `Model` / `Mesh` / `Material`, the orbit camera, OBJ and glTF loaders, demos.    |
+| `src/scene/`     | `Model` / `Mesh` / `Material`, rig data, the orbit camera, OBJ and glTF loaders, demos. |
+| `src/anim/`      | Keyframe sampling, pose blending, skinning and morph targets, the timeline.      |
 | `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, lighting, resolve.         |
 | `src/raster/`    | The triangle and line rasterizer and the SIMD wrappers it uses.                  |
 | `src/output/`    | Terminal backends and the cell-diffing writer.                                   |
@@ -65,6 +68,11 @@ C++ operating on arrays of floats and bytes.
 Dependencies point one way: `math` ← `core` ← `scene` ← `pipeline`/`raster` ←
 `output`/`export` ← `app`. The rasterizer does not know what a terminal is, and
 the backends do not know what a triangle is; they meet at a plain image.
+`anim` sits beside the renderer rather than inside it: it reads the rig stored
+in a `Model` and writes that model's vertices, and the renderer never knows the
+difference between a model that moves and one that does not. (The one loop in
+the diagram: the glTF loader calls `anim` once, to put a freshly loaded model
+into its rest pose.)
 
 ## Conventions
 
@@ -88,9 +96,12 @@ These match OpenGL and glTF, and are stated once in `src/math/mat.hpp`:
 `src/scene/loader.cpp` · `obj_loader.cpp` · `gltf_loader.cpp`
 
 Both loaders produce the same thing: a `Model`, which is a flat list of meshes
-whose vertices are already in **world space**. glTF's node hierarchy is walked
-once at load time and each node's transform is baked into its vertices, so the
-renderer never deals with a scene graph.
+whose vertices are already in **world space**, so the renderer never deals
+with a scene graph. For glTF the node hierarchy is copied into a `Rig` and the
+model is posed once as the file describes it (see [Animation](#11-animation));
+if the file has no animations that pose is final, the rig is thrown away, and
+the result is exactly as if each node's transform had been baked into its
+vertices.
 
 A `Vertex` is position, normal, UV and tangent. Whatever a file leaves out is
 generated (`src/scene/model.cpp`): smooth normals by area-weighted averaging of
@@ -424,6 +435,146 @@ while something is animating, or indefinitely-ish when idle. Nothing is
 rendered unless the camera, a setting or the window size changed, so an idle
 viewer uses no CPU.
 
+## 11. Animation
+
+`src/scene/rig.hpp` · `src/anim/`
+
+A static model is a bag of world-space triangles. An animated one also keeps
+what those triangles were made from, in a `Rig`:
+
+- **nodes** - a hierarchy of transforms, each stored as translation, rotation
+  (a quaternion) and scale rather than as a matrix, because those three can be
+  interpolated and a matrix cannot;
+- **skins** - lists of nodes acting as bones;
+- **animations** - named clips, each a set of keyframe tracks ("channels").
+
+and every mesh keeps its **rest shape** (vertices in the mesh's own space),
+its bone weights and its morph targets in a `MeshRig`. Each frame runs four
+small steps, all of them before the renderer starts:
+
+```
+ clip + time ─► sampleAnimation ─► Pose ─► computeWorldMatrices ─► applyPose ─► Mesh::vertices
+                                    ▲                                             (world space)
+                              blendPoses (cross-fade)
+```
+
+### Sampling keyframes
+
+`sampleChannel` in `src/anim/pose.cpp`
+
+A channel animates one property of one node: a sorted list of times and the
+value at each. To evaluate it, binary-search for the two keyframes around the
+current time and compute how far between them it falls, `u` in `[0, 1)`. Then,
+depending on the channel's interpolation mode:
+
+| Mode        | Result                                                                    |
+| ----------- | ------------------------------------------------------------------------- |
+| Step        | the earlier keyframe's value, held                                        |
+| Linear      | `lerp(p0, p1, u)` - or `slerp` for rotations                              |
+| CubicSpline | a Hermite curve through the two values, shaped by a tangent at each end   |
+
+Rotations get `slerp` because linearly blending two quaternions cuts the
+corner through the inside of the unit sphere: the result is shorter than unit
+length and moves fastest in the middle. `slerp` walks along the arc at constant
+angular speed, after first flipping one end if needed - `q` and `-q` are the
+same rotation, and only one of them is the short way round.
+
+A cubic spline keyframe stores three things: the slope arriving, the value,
+and the slope leaving. Between two keyframes the curve is
+
+```
+p(u) = (2u³ - 3u² + 1)·p0 + (u³ - 2u² + u)·dt·m0 + (-2u³ + 3u²)·p1 + (u³ - u²)·dt·m1
+```
+
+with `m0` the earlier key's out-tangent, `m1` the later key's in-tangent and
+`dt` the time between them (tangents are per second; the curve runs on `u`).
+With both tangents zero this is the familiar ease-in/ease-out `3u² - 2u³`.
+
+Times before the first keyframe or after the last clamp to that keyframe.
+
+### Poses, and blending them
+
+A `Pose` is one local transform per node plus the morph weights. Sampling a
+clip starts from the rest pose and overwrites only what the clip animates.
+Because a pose is plain data, two of them can be mixed: `blendPoses` lerps
+translations, scales and weights and slerps rotations. The `AnimationPlayer`
+(`src/anim/player.cpp`) uses that to **cross-fade** when you switch clips: the
+old clip keeps playing while the new one fades in along a smoothstep curve, so
+a fox goes from walking to running instead of teleporting between the two.
+
+The player is also the timeline - current clip, time, speed (negative runs
+backwards), looping, pause, seek. It owns no vertices; it only answers "what
+is the pose right now?".
+
+### From pose to world matrices
+
+Each node's transform is relative to its parent, so
+
+```
+world(node) = world(parent) · local(node)
+```
+
+The rig stores its node indices in an order that puts every parent before its
+children, which turns the recursion into one flat loop.
+
+### Morph targets
+
+A morph target is a second copy of (some of) a mesh's vertex data stored as
+*offsets* from the rest shape. Each target has a weight, and
+
+```
+position = rest + Σ weightₖ · targetₖ
+```
+
+Normals and tangents are offset the same way. Weights are just another
+animated property, which is how a face blends between expressions.
+
+### Skinning
+
+`applyPose` in `src/anim/skinning.cpp`
+
+A skinned vertex does not belong to one node; it follows up to four bones,
+each with a weight. For every bone the skin stores an **inverse bind matrix**:
+the transform from mesh space into that bone's own space at the moment the
+mesh was bound to the skeleton. So
+
+```
+jointMatrixⱼ = world(boneⱼ) · inverseBindⱼ
+```
+
+reads "express the vertex relative to the bone as it was, then put it where
+the bone is now". In the rest pose the two cancel and nothing moves. The
+vertex's final position is the weighted blend
+
+```
+position = (Σ wⱼ · jointMatrixⱼ) · restPosition
+```
+
+This is **linear blend skinning**. Blending matrices is not strictly a valid
+way to blend rotations - a joint twisted a long way loses some volume (the
+"candy wrapper" effect) - but it is one matrix per vertex, and it is what
+nearly every real-time engine does. Normals are transformed by the same
+blended matrix and renormalised; rigid (unskinned) meshes use their node's
+world matrix and the proper inverse-transpose for normals.
+
+The loop over vertices is split into chunks for the thread pool. Each chunk
+writes only its own vertices, so the result is identical for any thread count
+(a unit test checks this).
+
+### Where the camera looks
+
+A model's bounding box changes as it moves. Framing the camera on the first
+frame would let a jump leave the picture, so at load time
+`computeMotionBounds` poses the model at eight evenly spaced times in every
+clip and takes the union of the boxes; the camera frames that instead.
+
+### In the viewer
+
+`drawFrame` advances the player by the frame's `dt` and, if that changed the
+pose, calls `applyPose` before rendering. Scrubbing (`,` `.`) pauses and seeks;
+`m` switches clips with a 0.3 s cross-fade. `--gif` on an animated model
+records exactly one loop of the clip so the GIF repeats seamlessly.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle
@@ -452,6 +603,11 @@ viewer uses no CPU.
   correction, tile independence, and 1-thread vs N-thread equality.
 - `test_scene.cpp` - textures, mip-mapping, the camera, and both loaders
   against small files written by the test.
+- `test_anim.cpp` - keyframe interpolation (step, linear, cubic spline, the
+  short arc for rotations), hierarchy accumulation, pose blending, skinning
+  and morph targets against hand-computed positions, the timeline (looping,
+  reverse, seeking, cross-fades), and skinned / morphed glTF files built by
+  the test.
 - `test_output.cpp` - cell diffing, each backend's encoding (the kitty and GIF
   streams are decoded again and compared), palette quantisation.
 - `test_input.cpp` - the input parser, including sequences split across reads.

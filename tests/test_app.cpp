@@ -162,3 +162,25 @@ TEST_CASE("offscreen: image size, opacity and block upscaling") {
         for (int x = 0; x < blocky.width; ++x) flat = flat && blocky.row(y)[x] == blocky.row(y / 8 * 8)[x / 8 * 8];
     CHECK(flat);
 }
+
+TEST_CASE("options: animation controls") {
+    const ParseResult r = parse({"fox.glb", "--animation", "Run", "--anim-time=0.5", "--anim-speed", "-2", "--paused"});
+    REQUIRE(r.ok);
+    CHECK(r.options.animation == "Run");
+    CHECK(r.options.animationTime == doctest::Approx(0.5f));
+    CHECK(r.options.animationSpeed == doctest::Approx(-2.0f));
+    CHECK(r.options.animationPaused);
+    CHECK_FALSE(r.options.spinExplicit);
+
+    CHECK(parse({"fox.glb", "--list-animations"}).options.listAnimations);
+    CHECK(parse({"fox.glb", "--spin"}).options.spinExplicit);
+    // No --frames: the GIF length is chosen later, from the clip.
+    CHECK(parse({"fox.glb"}).options.frames == 0);
+
+    CHECK_FALSE(parse({"fox.glb", "--animation"}).ok);
+    CHECK_FALSE(parse({"fox.glb", "--animation", ""}).ok);
+    CHECK_FALSE(parse({"fox.glb", "--anim-time", "-1"}).ok);
+    CHECK_FALSE(parse({"fox.glb", "--anim-time", "soon"}).ok);
+    CHECK_FALSE(parse({"fox.glb", "--anim-speed", "nan"}).ok);
+    CHECK_FALSE(parse({"fox.glb", "--anim-speed", "1000"}).ok);
+}

@@ -1,6 +1,7 @@
 #include "app/options.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <string_view>
@@ -45,13 +46,21 @@ std::string usageText() {
                        "      --no-spin          start with auto-rotate off\n"
                        "      --spin-speed <d>   degrees per second (default: 40)\n"
                        "\n"
+                       "Animation:\n"
+                       "      --animation <a>    clip to play, by number (from 1) or name (default: the first)\n"
+                       "      --anim-time <s>    start this many seconds into the clip\n"
+                       "      --anim-speed <x>   playback rate, negative plays backwards (default: 1)\n"
+                       "      --paused           start with the animation paused\n"
+                       "      --list-animations  print the animations in the file and exit\n"
+                       "\n"
                        "Export:\n"
                        "      --print            print a single frame and exit\n"
                        "      --cols <n>, --rows <n>   size of the printed frame in cells\n"
                        "      --png <file>       render the view to a PNG and exit\n"
-                       "      --gif <file>       record a 360-degree turntable GIF and exit\n"
+                       "      --gif <file>       record a looping GIF and exit: a 360-degree turntable, or\n"
+                       "                         one loop of the animation (add --spin to turn it as well)\n"
                        "      --size <WxH>       image size for --png / --gif\n"
-                       "      --frames <n>       frames in the GIF (default: 72)\n"
+                       "      --frames <n>       frames in the GIF (default: 72, or one animation loop)\n"
                        "      --gif-fps <n>      GIF playback rate (default: 24)\n"
                        "      --blocks <n>       draw each pixel as an n x n block, like terminal cells\n"
                        "      --bench <n>        render n frames off-screen and print timings\n"
@@ -69,7 +78,10 @@ std::string usageText() {
            "  space                  auto-rotate      c           back-face culling\n"
            "  [ ]                    turn the light   b           next output backend\n"
            "  r                      reset view       o           status bar\n"
-           "  p                      save a PNG       ?  q        help, quit\n";
+           "  p                      save a PNG       ?  q        help, quit\n"
+           "\n"
+           "  a                      play / pause the animation      m  M   next / previous animation\n"
+           "  ,  .                   step back / forward             <  >   slower / faster\n";
 }
 
 RenderSettings makeRenderSettings(const Options& options) {
@@ -86,11 +98,31 @@ RenderSettings makeRenderSettings(const Options& options) {
 OrbitCamera makeCamera(const Options& options, const Model& model) {
     OrbitCamera camera;
     camera.fovY = radians(options.fov);  // before frame(): the distance depends on it
-    camera.frame(model.bounds());
+    camera.frame(model.framingBounds());
     if (options.yaw) camera.yaw = radians(*options.yaw);
     if (options.pitch) camera.pitch = radians(std::clamp(*options.pitch, -89.0f, 89.0f));
     camera.zoom(1.0f / options.zoom);
     return camera;
+}
+
+int findAnimation(const Model& model, const std::string& spec) {
+    const int count = static_cast<int>(model.rig.animations.size());
+    if (count == 0) return -1;
+    if (spec.empty()) return 0;
+
+    auto lower = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    };
+    // A name wins over a number, in case a clip is called "2".
+    for (int i = 0; i < count; ++i)
+        if (lower(model.rig.animations[static_cast<std::size_t>(i)].name) == lower(spec)) return i;
+
+    char* end = nullptr;
+    const long number = std::strtol(spec.c_str(), &end, 10);
+    if (end != spec.c_str() && *end == '\0' && number >= 1 && number <= count) return static_cast<int>(number - 1);
+    return -1;
 }
 
 namespace {
@@ -187,7 +219,9 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         else if (name == "--no-normal-maps") o.normalMaps = false;
         else if (name == "--no-cull") o.cullBackfaces = false;
         else if (name == "--no-stats") o.stats = false;
-        else if (name == "--spin") o.spin = true;
+        else if (name == "--spin") o.spin = o.spinExplicit = true;
+        else if (name == "--paused") o.animationPaused = true;
+        else if (name == "--list-animations") o.listAnimations = true;
         else if (name == "--no-spin") o.spin = false;
         else if (name == "--print") o.print = true;
         else if (name == "--demo") {
@@ -242,6 +276,16 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--spin-speed") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.spinSpeed)) return invalid();
+        } else if (name == "--animation") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.animation = std::string(value);
+        } else if (name == "--anim-time") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.animationTime) || o.animationTime < 0.0f) return invalid();
+        } else if (name == "--anim-speed") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.animationSpeed) || std::abs(o.animationSpeed) > 100.0f) return invalid();
         } else if (name == "--png") {
             if (!needValue()) return missing();
             if (value.empty()) return invalid();

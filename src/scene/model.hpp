@@ -7,6 +7,7 @@
 
 #include "core/texture.hpp"
 #include "math/vec.hpp"
+#include "scene/rig.hpp"
 
 namespace termesh {
 
@@ -43,12 +44,15 @@ struct Material {
 };
 
 // One draw call's worth of triangles sharing a material. Vertices are stored
-// in world space: loaders bake node transforms in.
+// in world space: loaders bake node transforms in. Meshes of an animated
+// model also carry `rig`, from which the vertices are recomputed every time
+// the pose changes (see anim/skinning.hpp).
 struct Mesh {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;  // three per triangle, CCW front faces
     int material = 0;
     bool hasUVs = false;
+    MeshRig rig;  // empty for static meshes
 };
 
 struct Bounds {
@@ -62,6 +66,14 @@ struct Model {
     std::vector<Mesh> meshes;
     std::vector<Material> materials;  // never empty after loading
     std::vector<Texture> textures;
+    Rig rig;  // empty unless the model is animated
+    // For animated models: a box around everything the animations reach, so
+    // the camera can be placed where the model never leaves the picture.
+    Bounds motionBounds;
+
+    bool animated() const { return !rig.animations.empty(); }
+    // What the camera should fit in view.
+    Bounds framingBounds() const { return animated() ? motionBounds : bounds(); }
 
     std::size_t triangleCount() const;
     std::size_t vertexCount() const;

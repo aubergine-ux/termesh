@@ -10,7 +10,8 @@ dest="${1:-samples}"
 mkdir -p "$dest"
 
 # Single-file binary models.
-for name in BoomBox Avocado Lantern BarramundiFish WaterBottle Corset; do
+# The last three are animated: skeletal (Fox, CesiumMan) and morph targets.
+for name in BoomBox Avocado Lantern BarramundiFish WaterBottle Corset Fox CesiumMan AnimatedMorphCube; do
     if [ ! -f "$dest/$name.glb" ]; then
         echo "fetching $name.glb"
         curl -fsSL -o "$dest/$name.glb" "$base/$name/glTF-Binary/$name.glb"

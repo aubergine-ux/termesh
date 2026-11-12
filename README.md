@@ -49,6 +49,7 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 | 💡 | **Real shading**: flat, Gouraud and Phong lighting, diffuse and normal maps, mip-mapping, hidden-line wireframe. |
 | 🖥️ | **Five ways to draw**: Kitty graphics, Sixel, 24-bit half-blocks, Braille dots and plain ASCII. The best one is picked automatically. |
 | ⚡ | **Fast**: multithreaded tiles, SIMD (SSE2 / NEON), and only the cells that changed are redrawn. A 95k-triangle model renders in under 3 ms. |
+| 🦊 | **Animation**: glTF skeletal animation with skinning, morph targets and cross-fades between clips, plus a timeline you can pause, scrub, slow down or run backwards. |
 | 🖱️ | **Interactive**: orbit, pan and zoom with the mouse or keyboard, switch shading live, toggle auto-rotate and a stats bar. |
 | 📦 | **OBJ and glTF 2.0**: `.obj` + `.mtl`, `.gltf` and `.glb`, with embedded or external textures. |
 | 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
@@ -109,8 +110,8 @@ build with `cmake --build build --config Release` and run `build\Release\termesh
 
 </details>
 
-No model to hand? `--demo knot`, `--demo cube` and `--demo sphere` are built in, and
-[`scripts/fetch-samples.sh`](scripts/fetch-samples.sh) downloads a few CC0 glTF models to play with.
+No model to hand? `--demo knot`, `--demo cube`, `--demo sphere` and the animated `--demo tentacle` are built
+in, and [`scripts/fetch-samples.sh`](scripts/fetch-samples.sh) downloads a few glTF sample models to play with.
 
 ## 🚀 Usage
 
@@ -121,6 +122,8 @@ termesh model.gltf --backend braille    # force an output backend
 termesh model.glb --png view.png        # render a still image
 termesh model.glb --spin --gif out.gif  # record a 360° turntable
 termesh model.glb --print               # print one frame and exit
+termesh fox.glb --animation Run         # play a named animation
+termesh fox.glb --list-animations       # see which animations a file has
 ```
 
 ### Controls
@@ -137,6 +140,10 @@ termesh model.glb --print               # print one frame and exit
 | Textures, normal maps  |                           | <kbd>t</kbd>, <kbd>n</kbd>    |
 | Back-face culling      |                           | <kbd>c</kbd>                  |
 | Turn the light         |                           | <kbd>[</kbd> <kbd>]</kbd>     |
+| Play / pause animation |                           | <kbd>a</kbd>                  |
+| Step back / forward    |                           | <kbd>,</kbd> <kbd>.</kbd>     |
+| Slower / faster        |                           | <kbd>&lt;</kbd> <kbd>&gt;</kbd> |
+| Next / previous animation |                        | <kbd>m</kbd> <kbd>M</kbd>     |
 | Next output backend    |                           | <kbd>b</kbd>                  |
 | Status bar             |                           | <kbd>o</kbd>                  |
 | Save a PNG             |                           | <kbd>p</kbd>                  |
@@ -161,12 +168,15 @@ termesh model.glb --print               # print one frame and exit
 | `--yaw`, `--pitch`, `--zoom`, `--fov` | initial camera |
 | `--spin`, `--no-spin`, `--spin-speed <deg/s>` | auto-rotation |
 | `--no-stats` | hide the status bar |
+| `--animation <a>` | animation to play, by number (from 1) or name |
+| `--anim-time <s>`, `--anim-speed <x>`, `--paused` | where to start, playback rate (negative runs backwards), start paused |
+| `--list-animations` | print the animations in the file and exit |
 | `--print`, `--cols <n>`, `--rows <n>` | print one frame into the scrollback |
 | `--png <file>`, `--size <WxH>` | render a still image |
-| `--gif <file>`, `--frames <n>`, `--gif-fps <n>` | record a turntable |
+| `--gif <file>`, `--frames <n>`, `--gif-fps <n>` | record a turntable, or one loop of an animation |
 | `--blocks <n>` | draw exported images with chunky n×n pixels, like terminal cells |
 | `--bench <n>` | render n frames off-screen and print timings |
-| `--demo <name>` | built-in model: `knot`, `cube`, `sphere` |
+| `--demo <name>` | built-in model: `knot`, `cube`, `sphere`, `tentacle` (animated) |
 
 </details>
 
@@ -181,6 +191,12 @@ termesh model.glb --spin --gif spin.gif --size 480x360
 
 # The same, with big square pixels like the half-block backend draws
 termesh model.glb --spin --gif spin.gif --size 480x480 --blocks 6
+
+# One seamless loop of an animation (add --spin to turn the camera too)
+termesh fox.glb --animation Run --gif run.gif --size 480x360
+
+# A still from 0.4 s into an animation
+termesh fox.glb --animation Run --anim-time 0.4 --png stride.png
 
 # One frame, straight into the terminal
 termesh model.glb --print --cols 60
@@ -296,9 +312,7 @@ AddressSanitizer / UBSan build. Formatting follows the checked-in `.clang-format
 
 ## 🚧 Limitations
 
-termesh is a viewer for static models.
-
-- No animation, skinning or morph targets.
+- Skinning uses at most four bones per vertex, and glTF cameras and lights are ignored.
 - Vertex colours and secondary UV sets are ignored.
 - Draco- and meshopt-compressed geometry and KTX2 / WebP textures are not supported.
 - Translucent materials are drawn as cut-outs rather than blended.

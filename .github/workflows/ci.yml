@@ -56,7 +56,11 @@ jobs:
           "$bin" --demo cube --gif cube.gif --size 160x120 --frames 12
           "$bin" --demo sphere --print --backend ascii --color none --cols 60 --rows 24
           "$bin" --demo knot --bench 50
-          test -s knot.png && test -s cube.gif
+          "$bin" --demo tentacle --list-animations
+          "$bin" --demo tentacle --animation curl --anim-time 1.5 --png tentacle.png --size 320x240
+          "$bin" --demo tentacle --gif tentacle.gif --size 160x120 --gif-fps 10
+          "$bin" --demo tentacle --bench 50
+          test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
 
   sanitizers:
     name: Linux (ASan + UBSan)
@@ -75,5 +79,6 @@ jobs:
         run: |
           build/termesh --demo knot --png knot.png --size 320x240
           build/termesh --demo cube --gif cube.gif --size 160x120 --frames 6
+          build/termesh --demo tentacle --animation wave --gif tentacle.gif --size 160x120 --frames 8
           build/termesh --demo knot --print --backend sixel --cols 40 --rows 12 > /dev/null
           build/termesh --demo knot --print --backend braille --cols 40 --rows 12 > /dev/null
