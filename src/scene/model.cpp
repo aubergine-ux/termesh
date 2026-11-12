@@ -161,7 +161,98 @@ void shufflePoints(Mesh& mesh) {
     }
 }
 
+namespace {
+
+// Large enough for any real model, small enough that squaring it (as
+// lengths and areas do) still fits in a float.
+constexpr float kLargestCoordinate = 1e15f;
+
+bool usable(float v) { return std::isfinite(v) && std::abs(v) <= kLargestCoordinate; }
+
+std::size_t fix(float& v, float fallback = 0.0f) {
+    if (usable(v)) return 0;
+    v = fallback;
+    return 1;
+}
+
+std::size_t fix(Vec3& v, Vec3 fallback = {0.0f, 0.0f, 0.0f}) {
+    if (usable(v.x) && usable(v.y) && usable(v.z)) return 0;
+    v = fallback;
+    return 1;
+}
+
+std::size_t fix(std::vector<Vec3>& values) {
+    std::size_t fixed = 0;
+    for (Vec3& v : values) fixed += fix(v);
+    return fixed;
+}
+
+}  // namespace
+
+std::size_t sanitizeModel(Model& model) {
+    std::size_t fixed = 0;
+    for (Mesh& mesh : model.meshes) {
+        for (Vertex& v : mesh.vertices) {
+            fixed += fix(v.position);
+            fixed += fix(v.normal, {0.0f, 0.0f, 1.0f});
+            fixed += fix(v.uv.x) + fix(v.uv.y);
+            Vec3 tangent = v.tangent.xyz();
+            if (fix(tangent, {1.0f, 0.0f, 0.0f}) || !usable(v.tangent.w)) {
+                v.tangent = Vec4(tangent, 1.0f);
+                ++fixed;
+            }
+        }
+        fixed += fix(mesh.colors);
+        fixed += fix(mesh.pointRadius);
+
+        MeshRig& rig = mesh.rig;
+        fixed += fix(rig.positions) + fix(rig.normals) + fix(rig.tangents);
+        for (Vec4& w : rig.weights) fixed += fix(w.x) + fix(w.y) + fix(w.z) + fix(w.w);
+        for (MorphTarget& target : rig.targets)
+            fixed += fix(target.positions) + fix(target.normals) + fix(target.tangents);
+    }
+    for (RigNode& node : model.rig.nodes) {
+        fixed += fix(node.rest.translation);
+        fixed += fix(node.rest.scale, {1.0f, 1.0f, 1.0f});
+        Quat& q = node.rest.rotation;
+        if (!usable(q.x) || !usable(q.y) || !usable(q.z) || !usable(q.w)) {
+            q = Quat{};
+            ++fixed;
+        }
+        for (float& w : node.weights) fixed += fix(w);
+    }
+    for (Skin& skin : model.rig.skins) {
+        for (Mat4& m : skin.inverseBind) {
+            bool ok = true;
+            for (const Vec4& column : m.c)
+                ok = ok && usable(column.x) && usable(column.y) && usable(column.z) && usable(column.w);
+            if (!ok) {
+                m = Mat4::identity();
+                ++fixed;
+            }
+        }
+    }
+    for (Animation& animation : model.rig.animations) {
+        fixed += fix(animation.duration);
+        for (AnimationChannel& channel : animation.channels) {
+            for (float& t : channel.times) fixed += fix(t);
+            for (float& v : channel.values) fixed += fix(v);
+        }
+    }
+    for (Material& m : model.materials) {
+        Vec3 base{m.baseColor.x, m.baseColor.y, m.baseColor.z};
+        if (fix(base, {1.0f, 1.0f, 1.0f}) || !usable(m.baseColor.w)) {
+            m.baseColor = Vec4(base, 1.0f);
+            ++fixed;
+        }
+        fixed += fix(m.emissive) + fix(m.metallic) + fix(m.roughness, 0.6f) + fix(m.normalScale, 1.0f) +
+                 fix(m.alphaCutoff, 0.5f);
+    }
+    return fixed;
+}
+
 void finalizeModel(Model& model) {
+    sanitizeModel(model);
     if (model.materials.empty()) model.materials.emplace_back();
     const int count = static_cast<int>(model.materials.size());
     for (Mesh& mesh : model.meshes) {

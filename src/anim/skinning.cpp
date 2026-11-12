@@ -85,6 +85,12 @@ void applyPose(Model& model, const Pose& pose, ThreadPool* pool) {
                     out.normal = normalize(transformDirection(nodeNormal, n), out.normal);
                     out.tangent = Vec4(normalize(transformDirection(nodeWorld, t), out.tangent.xyz()), out.tangent.w);
                 }
+                // A pose can still overflow (huge scales multiplied down a
+                // chain of bones). Whatever happens, the renderer is only
+                // ever handed real numbers.
+                if (!isFinite(out.position)) out.position = rig.positions[i];
+                if (!isFinite(out.normal)) out.normal = {0.0f, 0.0f, 1.0f};
+                if (!isFinite(out.tangent.xyz())) out.tangent = Vec4(1.0f, 0.0f, 0.0f, 1.0f);
             }
         };
 

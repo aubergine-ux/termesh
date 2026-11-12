@@ -87,13 +87,13 @@ struct Options {
     bool listAnimations = false;                               // print the clips in the file and exit
 
     // Non-interactive modes.
-    bool preview = false;       // a quick still for a file manager's preview pane
-    bool previewCache = true;   // remember previews between runs
-    int previewMaxMb = 256;     // files larger than this are described, not drawn
-    bool print = false;         // print one frame to the terminal and exit
-    std::string pngPath;        // render one frame to a PNG and exit
-    std::string gifPath;        // record a turntable animation and exit
-    std::string mp4Path;        // the same as an MP4 (needs ffmpeg)
+    bool preview = false;      // a quick still for a file manager's preview pane
+    bool previewCache = true;  // remember previews between runs
+    int previewMaxMb = 256;    // files larger than this are described, not drawn
+    bool print = false;        // print one frame to the terminal and exit
+    std::string pngPath;       // render one frame to a PNG and exit
+    std::string gifPath;       // record a turntable animation and exit
+    std::string mp4Path;       // the same as an MP4 (needs ffmpeg)
     // Record the interactive session from the start: a .cast, .gif or .mp4.
     std::string recordPath;
     int width = 0, height = 0;  // image size for --png / --gif (0 = default)

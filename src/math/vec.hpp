@@ -87,6 +87,8 @@ constexpr float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; 
 constexpr Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
 inline float length(Vec3 a) { return std::sqrt(dot(a, a)); }
 constexpr float lengthSquared(Vec3 a) { return dot(a, a); }
+// False if any component is infinite or not a number.
+inline bool isFinite(Vec3 a) { return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z); }
 
 // Normalise, returning `fallback` for vectors too short to have a meaningful
 // direction (degenerate triangles, zero normals in sloppy model files, ...).

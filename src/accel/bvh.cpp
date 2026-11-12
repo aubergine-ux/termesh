@@ -168,7 +168,10 @@ void Bvh::build(const Mesh& mesh) {
             const float scale = static_cast<float>(kBins) / extent;
             for (std::uint32_t i = first; i < first + count; ++i) {
                 const std::uint32_t tri = order_[i];
-                const int bin = std::min(static_cast<int>((centroids[tri][axis] - lo) * scale), kBins - 1);
+                // (Written so that a centroid that is not a number lands in
+                // the first bin rather than being converted to an integer.)
+                const float position = (centroids[tri][axis] - lo) * scale;
+                const int bin = position >= 1.0f ? std::min(static_cast<int>(std::min(position, 1e6f)), kBins - 1) : 0;
                 ++binCount[bin];
                 include(binBox[bin], boxes[tri].min);
                 include(binBox[bin], boxes[tri].max);

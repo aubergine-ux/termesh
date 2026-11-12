@@ -101,7 +101,7 @@ TERMESH_API int termesh_scene_add_demo(termesh_scene* scene, const char* name);
 typedef struct termesh_mesh {
     size_t struct_size;
 
-    const float* positions;  /* x y z per vertex */
+    const float* positions; /* x y z per vertex */
     size_t vertex_count;
     const uint32_t* indices; /* three per triangle; NULL draws the vertices as a point cloud */
     size_t index_count;
@@ -110,8 +110,8 @@ typedef struct termesh_mesh {
     const float* uvs;     /* optional: u v per vertex, (0, 0) at the top left */
     const float* colors;  /* optional: r g b per vertex */
 
-    const char* name;     /* optional */
-    float base_color[4];  /* r g b a; a < 1 is translucent */
+    const char* name;    /* optional */
+    float base_color[4]; /* r g b a; a < 1 is translucent */
     float metallic;
     float roughness;
     int double_sided;
@@ -156,15 +156,15 @@ typedef enum termesh_light_type {
 
 typedef struct termesh_light {
     size_t struct_size;
-    int type;            /* termesh_light_type */
-    float direction[3];  /* the way the light travels (directional, spot) */
-    float position[3];   /* point, spot */
+    int type;           /* termesh_light_type */
+    float direction[3]; /* the way the light travels (directional, spot) */
+    float position[3];  /* point, spot */
     float color[3];
     float intensity;
-    float range;         /* point, spot: 0 is unlimited */
-    float inner_cone;    /* spot: full brightness inside this angle from the axis... */
-    float outer_cone;    /* ...none outside this one */
-    int casts_shadow;    /* directional and spot; also needs termesh_settings.shadows */
+    float range;      /* point, spot: 0 is unlimited */
+    float inner_cone; /* spot: full brightness inside this angle from the axis... */
+    float outer_cone; /* ...none outside this one */
+    int casts_shadow; /* directional and spot; also needs termesh_settings.shadows */
     int attached_to_camera;
 } termesh_light;
 
@@ -220,7 +220,7 @@ typedef enum termesh_dither {
 
 typedef struct termesh_settings {
     size_t struct_size;
-    int shading;           /* termesh_shading */
+    int shading; /* termesh_shading */
     int wireframe;
     int textures;
     int normal_maps;
@@ -230,18 +230,18 @@ typedef struct termesh_settings {
     uint8_t background[4]; /* sRGB r g b; the fourth byte is unused */
     int shadows;
     int shadow_map_size;
-    int shadow_softness;   /* 1 (hard) to 7 */
-    int skybox;            /* draw the environment as the background; -1 leaves it to the scene */
-    float sky_blur;        /* 0 to 1; negative leaves it to the scene */
+    int shadow_softness; /* 1 (hard) to 7 */
+    int skybox;          /* draw the environment as the background; -1 leaves it to the scene */
+    float sky_blur;      /* 0 to 1; negative leaves it to the scene */
     int ssao;
     int bloom;
-    int outline;           /* -1 draws outlines with toon shading only */
+    int outline; /* -1 draws outlines with toon shading only */
     int fxaa;
-    int tone_mapper;       /* termesh_tone_mapper */
-    float exposure;        /* in stops */
-    int supersampling;     /* 1 to 4; 0 picks a default */
-    float lod_tolerance;   /* level of detail: error allowed, in pixels; 0 is off */
-    int dither;            /* termesh_dither; for termesh_render_text */
+    int tone_mapper;     /* termesh_tone_mapper */
+    float exposure;      /* in stops */
+    int supersampling;   /* 1 to 4; 0 picks a default */
+    float lod_tolerance; /* level of detail: error allowed, in pixels; 0 is off */
+    int dither;          /* termesh_dither; for termesh_render_text */
 } termesh_settings;
 
 /* The defaults. */
@@ -273,11 +273,7 @@ typedef enum termesh_backend {
     TERMESH_BACKEND_KITTY = 4      /* pixels, via the kitty graphics protocol */
 } termesh_backend;
 
-typedef enum termesh_color {
-    TERMESH_COLOR_TRUECOLOR = 0,
-    TERMESH_COLOR_256 = 1,
-    TERMESH_COLOR_NONE = 2
-} termesh_color;
+typedef enum termesh_color { TERMESH_COLOR_TRUECOLOR = 0, TERMESH_COLOR_256 = 1, TERMESH_COLOR_NONE = 2 } termesh_color;
 
 /* Render to the text a terminal would display: `rows` lines for a cols x
  * rows area, ready to write to a terminal. Returns a NUL-terminated string

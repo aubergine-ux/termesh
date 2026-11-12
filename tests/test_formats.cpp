@@ -121,16 +121,15 @@ TEST_CASE("stl: a binary file may begin with the word 'solid'") {
 
 TEST_CASE("stl: ascii") {
     TempDir dir;
-    const std::string
-        text =
-            "solid wedge\n"
-            " facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1.5 0 0\n   vertex 0 2e0 0\n  endloop\n "
-            "endfacet\n"
-            " facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 0 0 0\n   vertex 0 0 0\n  endloop\n "
-            "endfacet\n"  // no area
-            " facet normal 1 0 0\n  outer loop\n   vertex 0 0 1\n   vertex -1 0 1\n   vertex 0 -1 1\n  endloop\n "
-            "endfacet\n"
-            "endsolid wedge\n";
+    const std::string text =
+        "solid wedge\n"
+        " facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1.5 0 0\n   vertex 0 2e0 0\n  endloop\n "
+        "endfacet\n"
+        " facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 0 0 0\n   vertex 0 0 0\n  endloop\n "
+        "endfacet\n"  // no area
+        " facet normal 1 0 0\n  outer loop\n   vertex 0 0 1\n   vertex -1 0 1\n   vertex 0 -1 1\n  endloop\n "
+        "endfacet\n"
+        "endsolid wedge\n";
     const LoadResult loaded = loadModel(dir.write("wedge.STL", text));  // the extension's case does not matter
     REQUIRE_MESSAGE(loaded.ok, loaded.error);
     // The degenerate facet is dropped.

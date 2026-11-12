@@ -1,5 +1,7 @@
 #include "core/json.hpp"
 
+#include <cmath>
+
 #include <cstdlib>
 
 namespace termesh {
@@ -154,6 +156,9 @@ private:
         }
         out.type_ = Json::Type::Number;
         out.number_ = std::strtod(std::string(text_.substr(start, pos_ - start)).c_str(), nullptr);
+        // Every number in a scene file ends up in a float. One too large
+        // for that would become infinity, and spread from there.
+        if (!std::isfinite(out.number_) || std::abs(out.number_) > 1e30) return fail("the number is too large");
         return true;
     }
 

@@ -3,7 +3,8 @@ name: Wheels
 # Builds the Python wheels for every platform. On a version tag they are
 # also published to PyPI, through PyPI's trusted publishing: no token is
 # stored here. PyPI has to be told once that this workflow of this
-# repository may publish the "termesh" project (see docs/python.md).
+# repository may publish the "termesh" project (see docs/python.md); until
+# then the wheels are built and kept as artifacts, and nothing is uploaded.
 on:
   push:
     tags: ["v*"]
@@ -38,7 +39,9 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only once PyPI has been told to trust this workflow (docs/python.md):
+    # then set the repository variable PYPI_PUBLISH to "true".
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PYPI_PUBLISH == 'true'
     needs: [wheels, sdist]
     runs-on: ubuntu-latest
     environment: pypi

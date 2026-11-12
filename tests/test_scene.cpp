@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <limits>
+
+#include <cmath>
+
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -479,4 +483,73 @@ TEST_CASE("gltf: garbage is rejected with an error") {
     CHECK_FALSE(loadModel(dir.write("bad.gltf", "{ this is not json")).ok);
     CHECK_FALSE(loadModel(dir.write("bad.glb", "glTF but not really")).ok);
     CHECK_FALSE(loadModel(dir.file("missing.glb")).ok);
+}
+
+TEST_CASE("model: numbers that are not numbers are replaced when a model is finalised") {
+    const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+    Model model;
+    Mesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[0].position = {nan, 1.0f, 2.0f};
+    mesh.vertices[1].position = {1.0f, inf, 0.0f};
+    mesh.vertices[2].position = {0.0f, 1.0f, 3e38f};  // finite, but its square is not
+    mesh.vertices[0].normal = {0.0f, nan, 0.0f};
+    mesh.vertices[1].uv = {inf, 0.5f};
+    mesh.vertices[2].tangent = Vec4(1.0f, 0.0f, 0.0f, nan);
+    mesh.indices = {0, 1, 2};
+    mesh.colors = {{nan, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}};
+    mesh.rig.positions = {{nan, nan, nan}, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f}};
+    mesh.rig.weights = {{nan, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}};
+    model.meshes.push_back(mesh);
+    Material material;
+    material.baseColor = Vec4(nan, 0.5f, 0.5f, 1.0f);
+    material.roughness = inf;
+    model.materials.push_back(material);
+    model.rig.nodes.resize(1);
+    model.rig.nodes[0].rest.translation = {inf, 0.0f, 0.0f};
+    model.rig.nodes[0].rest.rotation = Quat{nan, 0.0f, 0.0f, 1.0f};
+    model.rig.nodes[0].rest.scale = {1.0f, nan, 1.0f};
+    model.rig.skins.resize(1);
+    model.rig.skins[0].inverseBind.resize(1);
+    model.rig.skins[0].inverseBind[0](2, 3) = nan;
+    Animation animation;
+    animation.duration = inf;
+    AnimationChannel channel;
+    channel.times = {0.0f, nan};
+    channel.values = {0.0f, 0.0f, 0.0f, inf, 1.0f, 1.0f};
+    animation.channels.push_back(channel);
+    model.rig.animations.push_back(animation);
+
+    finalizeModel(model);
+    const Mesh& fixed = model.meshes[0];
+    for (const Vertex& v : fixed.vertices) {
+        CHECK(isFinite(v.position));
+        CHECK(isFinite(v.normal));
+        CHECK(std::isfinite(v.uv.x));
+        CHECK(std::isfinite(v.tangent.w));
+        CHECK(std::abs(v.position.z) < 1e16f);
+    }
+    // What was fine is left alone.
+    // (A vertex with one bad coordinate is moved to the origin whole.)
+    CHECK(fixed.vertices[1].position == Vec3{0.0f, 0.0f, 0.0f});
+    CHECK(fixed.vertices[1].uv.y == 0.5f);
+    CHECK(fixed.colors[1].x == 0.5f);
+    CHECK(isFinite(fixed.colors[0]));
+    CHECK(isFinite(fixed.rig.positions[0]));
+    CHECK(fixed.rig.positions[1].y == 2.0f);
+    CHECK(std::isfinite(fixed.rig.weights[0].x));
+    CHECK(model.materials[0].baseColor.x == 1.0f);
+    CHECK(model.materials[0].roughness == doctest::Approx(0.6f));
+    CHECK(isFinite(model.rig.nodes[0].rest.translation));
+    CHECK(model.rig.nodes[0].rest.rotation == Quat{});
+    CHECK(model.rig.nodes[0].rest.scale.y == 1.0f);
+    CHECK(model.rig.skins[0].inverseBind[0](2, 3) == 0.0f);
+    CHECK(std::isfinite(model.rig.animations[0].duration));
+    CHECK(std::isfinite(model.rig.animations[0].channels[0].times[1]));
+    CHECK(std::isfinite(model.rig.animations[0].channels[0].values[3]));
+    CHECK(isFinite(model.bounds().max));
+
+    // A clean model has nothing to fix.
+    Model clean = makeDemoModel("cube");
+    CHECK(sanitizeModel(clean) == 0);
 }

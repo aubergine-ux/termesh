@@ -103,6 +103,13 @@ void computeNormals(Mesh& mesh);
 // Fill in vertex tangents from the UV layout, for normal mapping.
 void computeTangents(Mesh& mesh);
 
+// Replace every number in the model that is infinite, not a number, or too
+// large to calculate with by something harmless, and return how many were.
+// Files are not to be trusted: a damaged one can hold any bit pattern where
+// a coordinate should be, and one such value would otherwise spread through
+// everything computed from it. Called by finalizeModel.
+std::size_t sanitizeModel(Model& model);
+
 // Make sure the model has at least one material and that every mesh refers to
 // a valid one, and work out a splat radius for each mesh.
 void finalizeModel(Model& model);

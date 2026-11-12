@@ -352,9 +352,15 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
         const float sx = (ndcX * 0.5f + 0.5f) * ctx.width;
         const float sy = (0.5f - ndcY * 0.5f) * ctx.height;
 
-        // Snap to the subpixel grid. The clamp only absorbs rounding error.
-        x[i] = std::clamp(static_cast<std::int32_t>(std::floor(sx * kSubpixelScale + 0.5f)), 0, ctx.maxX);
-        y[i] = std::clamp(static_cast<std::int32_t>(std::floor(sy * kSubpixelScale + 0.5f)), 0, ctx.maxY);
+        // Snap to the subpixel grid. The clamp only absorbs rounding error
+        // - and is done before converting, so that a coordinate that is
+        // not a number at all becomes 0 instead of undefined behaviour.
+        const auto snap = [](float v, std::int32_t max) {
+            v = std::floor(v * kSubpixelScale + 0.5f);
+            return v >= 1.0f ? static_cast<std::int32_t>(std::min(v, static_cast<float>(max))) : 0;
+        };
+        x[i] = snap(sx, ctx.maxX);
+        y[i] = snap(sy, ctx.maxY);
         z[i] = std::clamp(ndcZ * 0.5f + 0.5f, 0.0f, 1.0f);
     }
 

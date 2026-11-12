@@ -182,4 +182,6 @@ with cibuildwheel and, when a `v*` tag is pushed, uploads them to PyPI by
 trusted publishing. That needs a one-time setup on pypi.org: under *Publishing*
 add a (pending) trusted publisher for project `termesh`, owner
 `aubergine-ux`, repository `termesh`, workflow `wheels.yml`, environment
-`pypi`.
+`pypi`. Then set the repository variable `PYPI_PUBLISH` to `true`
+(Settings > Secrets and variables > Actions > Variables); until it is set,
+tags build the wheels without uploading them.

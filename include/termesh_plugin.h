@@ -55,7 +55,7 @@ typedef struct termesh_plugin_model termesh_plugin_model;
 typedef struct termesh_plugin_mesh {
     size_t struct_size;
 
-    const float* positions;  /* x y z per vertex */
+    const float* positions; /* x y z per vertex */
     size_t vertex_count;
     const uint32_t* indices; /* three per triangle; NULL makes it a point cloud */
     size_t index_count;
@@ -64,8 +64,8 @@ typedef struct termesh_plugin_mesh {
     const float* uvs;     /* optional: u v per vertex */
     const float* colors;  /* optional: linear r g b per vertex */
 
-    const char* name;     /* optional */
-    float base_color[4];  /* linear r g b, and alpha */
+    const char* name;    /* optional */
+    float base_color[4]; /* linear r g b, and alpha */
     float metallic;
     float roughness;
     int double_sided;

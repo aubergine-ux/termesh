@@ -688,3 +688,13 @@ TEST_CASE("options: several models, or one scene") {
     const char* negative[] = {"termesh", "scene.json", "--camera-time", "-1"};
     CHECK_FALSE(parseOptions(4, negative).ok);
 }
+
+TEST_CASE("json: numbers too large to use are refused") {
+    Json json;
+    std::string error;
+    CHECK(!Json::parse("{\"x\": 1e999}", json, error));
+    CHECK(error.find("too large") != std::string::npos);
+    CHECK(!Json::parse("[1e40]", json, error));
+    CHECK(Json::parse("[1e20, -2.5e-30, 0]", json, error));
+    CHECK(json[0].number() == doctest::Approx(1e20));
+}
