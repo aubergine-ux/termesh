@@ -129,7 +129,9 @@ target_compile_definitions(termesh_core PUBLIC TERMESH_VERSION="${PROJECT_VERSIO
 # Plugins are shared libraries loaded while the program runs, which a fully
 # static program cannot do.
 target_link_libraries(termesh_core PUBLIC ${CMAKE_DL_LIBS})
-if(TERMESH_STATIC AND NOT MSVC AND NOT APPLE)
+set(TERMESH_CAN_LOAD_PLUGINS ON)
+if(EMSCRIPTEN OR (TERMESH_STATIC AND NOT MSVC AND NOT APPLE))
+    set(TERMESH_CAN_LOAD_PLUGINS OFF)
     target_compile_definitions(termesh_core PUBLIC TERMESH_NO_PLUGINS)
 endif()
 
@@ -377,7 +379,7 @@ if(TERMESH_BUILD_TESTS)
     if(EMSCRIPTEN)
         target_link_options(termesh_tests PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1)
     endif()
-    if(TARGET termesh_plugin_xyz)
+    if(TARGET termesh_plugin_xyz AND TERMESH_CAN_LOAD_PLUGINS)
         # The tests load the example plugins: tell them where those are, and
         # make sure they are built first.
         target_compile_definitions(termesh_tests PRIVATE

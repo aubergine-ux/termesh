@@ -13,3 +13,6 @@ __pycache__/
 /dist/
 /wheelhouse/
 .pytest_cache/
+# recordings made by the viewer (R, --record)
+/termesh-*.cast
+/termesh-*.mp4

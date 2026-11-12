@@ -491,7 +491,7 @@ int loadPlugins(const Options& options) {
             for (std::size_t i = 0; i < plugin.backends.size(); ++i)
                 std::printf("  backend  %s  %s\n", plugin.backends[i].c_str(), plugin.backendDescriptions[i].c_str());
         }
-        if (!options.plugins.empty() || options.autoPlugins) {
+        if (pluginsSupported() && options.autoPlugins) {
             std::printf("plugin directories:\n");
             for (const std::string& directory : pluginDirectories()) std::printf("  %s\n", directory.c_str());
         }

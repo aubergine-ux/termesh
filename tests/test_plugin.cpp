@@ -16,6 +16,13 @@ TEST_CASE("plugins: where they are looked for") {
     CHECK(std::string(pluginExtension()).front() == '.');
     // Whatever else is on the list, it does not throw and has no empty entries.
     for (const std::string& directory : pluginDirectories()) CHECK(!directory.empty());
+
+    // A build that cannot load plugins says so, rather than failing oddly.
+    if (!pluginsSupported()) {
+        std::string error;
+        CHECK(!loadPlugin("anything.so", error));
+        CHECK(error.find("cannot load plugins") != std::string::npos);
+    }
 }
 
 TEST_CASE("plugins: a custom backend can be registered by anything") {
