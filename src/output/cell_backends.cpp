@@ -201,12 +201,8 @@ protected:
 
 }  // namespace
 
-std::unique_ptr<Backend> makeHalfBlockBackend(ColorDepth color) {
-    return std::make_unique<HalfBlockBackend>(color);
-}
-std::unique_ptr<Backend> makeBrailleBackend(ColorDepth color) {
-    return std::make_unique<BrailleBackend>(color);
-}
+std::unique_ptr<Backend> makeHalfBlockBackend(ColorDepth color) { return std::make_unique<HalfBlockBackend>(color); }
+std::unique_ptr<Backend> makeBrailleBackend(ColorDepth color) { return std::make_unique<BrailleBackend>(color); }
 std::unique_ptr<Backend> makeAsciiBackend(ColorDepth color) { return std::make_unique<AsciiBackend>(color); }
 
 }  // namespace termesh

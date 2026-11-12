@@ -15,48 +15,48 @@ std::string usageText() {
         if (!demos.empty()) demos += ", ";
         demos += name;
     }
-    return std::string(
-               "termesh " TERMESH_VERSION " - 3D model viewer for the terminal\n"
-               "\n"
-               "Usage:\n"
-               "  termesh [options] <model.obj | model.gltf | model.glb>\n"
-               "  termesh [options] --demo <name>\n"
-               "\n"
-               "Display:\n"
-               "  -b, --backend <name>   kitty, sixel, halfblock, braille or ascii (default: best available)\n"
-               "      --color <depth>    truecolor, 256 or none (default: detect)\n"
-               "  -s, --shading <mode>   flat, gouraud or phong (default: phong)\n"
-               "  -w, --wireframe        start in wireframe mode\n"
-               "      --no-textures      ignore textures\n"
-               "      --no-normal-maps   ignore normal maps\n"
-               "      --no-cull          draw back faces too\n"
-               "      --bg <rrggbb>      background colour\n"
-               "      --ssaa <n>         supersampling factor, 1-4 (default: depends on backend)\n"
-               "      --threads <n>      worker threads (default: all cores)\n"
-               "      --fps <n>          frame rate limit (default: 60)\n"
-               "      --no-stats         hide the status bar\n"
-               "\n"
-               "Camera:\n"
-               "      --yaw <deg>        initial rotation around the vertical axis\n"
-               "      --pitch <deg>      initial elevation\n"
-               "      --zoom <factor>    initial zoom, > 1 is closer (default: 1)\n"
-               "      --fov <deg>        vertical field of view (default: 40)\n"
-               "      --spin             auto-rotate (the default when interactive)\n"
-               "      --no-spin          start with auto-rotate off\n"
-               "      --spin-speed <d>   degrees per second (default: 40)\n"
-               "\n"
-               "Export:\n"
-               "      --print            print a single frame and exit\n"
-               "      --cols <n>, --rows <n>   size of the printed frame in cells\n"
-               "      --png <file>       render the view to a PNG and exit\n"
-               "      --gif <file>       record a 360-degree turntable GIF and exit\n"
-               "      --size <WxH>       image size for --png / --gif\n"
-               "      --frames <n>       frames in the GIF (default: 72)\n"
-               "      --gif-fps <n>      GIF playback rate (default: 24)\n"
-               "      --blocks <n>       draw each pixel as an n x n block, like terminal cells\n"
-               "      --bench <n>        render n frames off-screen and print timings\n"
-               "\n"
-               "      --demo <name>      built-in model: ") +
+    return std::string("termesh " TERMESH_VERSION
+                       " - 3D model viewer for the terminal\n"
+                       "\n"
+                       "Usage:\n"
+                       "  termesh [options] <model.obj | model.gltf | model.glb>\n"
+                       "  termesh [options] --demo <name>\n"
+                       "\n"
+                       "Display:\n"
+                       "  -b, --backend <name>   kitty, sixel, halfblock, braille or ascii (default: best available)\n"
+                       "      --color <depth>    truecolor, 256 or none (default: detect)\n"
+                       "  -s, --shading <mode>   flat, gouraud or phong (default: phong)\n"
+                       "  -w, --wireframe        start in wireframe mode\n"
+                       "      --no-textures      ignore textures\n"
+                       "      --no-normal-maps   ignore normal maps\n"
+                       "      --no-cull          draw back faces too\n"
+                       "      --bg <rrggbb>      background colour\n"
+                       "      --ssaa <n>         supersampling factor, 1-4 (default: depends on backend)\n"
+                       "      --threads <n>      worker threads (default: all cores)\n"
+                       "      --fps <n>          frame rate limit (default: 60)\n"
+                       "      --no-stats         hide the status bar\n"
+                       "\n"
+                       "Camera:\n"
+                       "      --yaw <deg>        initial rotation around the vertical axis\n"
+                       "      --pitch <deg>      initial elevation\n"
+                       "      --zoom <factor>    initial zoom, > 1 is closer (default: 1)\n"
+                       "      --fov <deg>        vertical field of view (default: 40)\n"
+                       "      --spin             auto-rotate (the default when interactive)\n"
+                       "      --no-spin          start with auto-rotate off\n"
+                       "      --spin-speed <d>   degrees per second (default: 40)\n"
+                       "\n"
+                       "Export:\n"
+                       "      --print            print a single frame and exit\n"
+                       "      --cols <n>, --rows <n>   size of the printed frame in cells\n"
+                       "      --png <file>       render the view to a PNG and exit\n"
+                       "      --gif <file>       record a 360-degree turntable GIF and exit\n"
+                       "      --size <WxH>       image size for --png / --gif\n"
+                       "      --frames <n>       frames in the GIF (default: 72)\n"
+                       "      --gif-fps <n>      GIF playback rate (default: 24)\n"
+                       "      --blocks <n>       draw each pixel as an n x n block, like terminal cells\n"
+                       "      --bench <n>        render n frames off-screen and print timings\n"
+                       "\n"
+                       "      --demo <name>      built-in model: ") +
            demos +
            "\n"
            "  -h, --help             show this help\n"
@@ -254,8 +254,8 @@ ParseResult parseOptions(int argc, const char* const* argv) {
             if (!needValue()) return missing();
             const std::size_t x = value.find_first_of("xX");
             if (x == std::string_view::npos || !parseInt(value.substr(0, x), o.width) ||
-                !parseInt(value.substr(x + 1), o.height) || o.width < 8 || o.height < 8 ||
-                o.width > 8192 || o.height > 8192)
+                !parseInt(value.substr(x + 1), o.height) || o.width < 8 || o.height < 8 || o.width > 8192 ||
+                o.height > 8192)
                 return invalid();
         } else if (name == "--cols") {
             if (!needValue()) return missing();

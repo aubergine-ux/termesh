@@ -77,15 +77,15 @@ bool Terminal::enterRawMode() {
 
     // Output: interpret escape sequences, and do not move to the next line
     // on our behalf when a row is filled.
-    const DWORD outputMode = state_->originalOutputMode | ENABLE_PROCESSED_OUTPUT |
-                             ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+    const DWORD outputMode = state_->originalOutputMode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                             DISABLE_NEWLINE_AUTO_RETURN;
     if (!SetConsoleMode(state_->output, outputMode)) return false;
 
     // Input: deliver keys (and mouse reports) as escape sequences, unbuffered
     // and unechoed.
     DWORD inputMode = state_->originalInputMode;
-    inputMode &= ~static_cast<DWORD>(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT |
-                                     ENABLE_QUICK_EDIT_MODE);
+    inputMode &=
+        ~static_cast<DWORD>(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_QUICK_EDIT_MODE);
     inputMode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS;
     if (!SetConsoleMode(state_->input, inputMode)) {
         SetConsoleMode(state_->output, state_->originalOutputMode);

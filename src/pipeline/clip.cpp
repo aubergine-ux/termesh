@@ -32,8 +32,7 @@ namespace {
 ClipVertex interpolate(const ClipVertex& a, const ClipVertex& b, float t, int varyingCount) {
     ClipVertex r;
     r.position = a.position + (b.position - a.position) * t;
-    for (int i = 0; i < varyingCount; ++i)
-        r.varyings[i] = a.varyings[i] + (b.varyings[i] - a.varyings[i]) * t;
+    for (int i = 0; i < varyingCount; ++i) r.varyings[i] = a.varyings[i] + (b.varyings[i] - a.varyings[i]) * t;
     return r;
 }
 
@@ -48,8 +47,7 @@ ClipVertex interpolate(const ClipVertex& a, const ClipVertex& b, float t, int va
 //
 // The output is the part of the polygon on the inside of the plane, still
 // convex and with its winding order preserved.
-int clipAgainstPlane(const ClipVertex* in, int count, ClipVertex* out, unsigned plane,
-                     int varyingCount) {
+int clipAgainstPlane(const ClipVertex* in, int count, ClipVertex* out, unsigned plane, int varyingCount) {
     int n = 0;
     const ClipVertex* prev = &in[count - 1];
     float prevDist = clipDistance(prev->position, plane);

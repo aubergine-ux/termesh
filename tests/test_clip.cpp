@@ -48,8 +48,7 @@ TEST_CASE("clip: outcodes") {
 }
 
 TEST_CASE("clip: a triangle inside the frustum is untouched") {
-    ClipVertex poly[kMaxClipVertices] = {vertex(-0.5f, -0.5f, 0, 1), vertex(0.5f, -0.5f, 0, 1),
-                                         vertex(0, 0.5f, 0, 1)};
+    ClipVertex poly[kMaxClipVertices] = {vertex(-0.5f, -0.5f, 0, 1), vertex(0.5f, -0.5f, 0, 1), vertex(0, 0.5f, 0, 1)};
     const int n = clipPolygon(poly, 3, kClipAll, 2);
     REQUIRE(n == 3);
     CHECK(poly[0].position == Vec4{-0.5f, -0.5f, 0, 1});
@@ -103,8 +102,7 @@ TEST_CASE("clip: new vertices lie on the plane with linearly interpolated varyin
 }
 
 TEST_CASE("clip: a huge triangle is cut down to the frustum") {
-    ClipVertex poly[kMaxClipVertices] = {vertex(-50, -40, 0.2f, 1), vertex(60, -30, -0.4f, 1),
-                                         vertex(5, 70, 0.9f, 1)};
+    ClipVertex poly[kMaxClipVertices] = {vertex(-50, -40, 0.2f, 1), vertex(60, -30, -0.4f, 1), vertex(5, 70, 0.9f, 1)};
     const float before = projectedArea(poly, 3);
     const int n = clipPolygon(poly, 3, kClipAll, 0);
     REQUIRE(n >= 3);

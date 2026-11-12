@@ -36,21 +36,21 @@ struct Options {
     float fov = 40.0f;                // vertical field of view, degrees
 
     // Interaction.
-    bool spin = true;          // auto-rotate
-    float spinSpeed = 40.0f;   // degrees per second
+    bool spin = true;         // auto-rotate
+    float spinSpeed = 40.0f;  // degrees per second
     int fpsLimit = 60;
-    bool stats = true;         // status bar
+    bool stats = true;  // status bar
 
     // Non-interactive modes.
-    bool print = false;        // print one frame to the terminal and exit
-    std::string pngPath;       // render one frame to a PNG and exit
-    std::string gifPath;       // record a turntable animation and exit
-    int width = 0, height = 0; // image size for --png / --gif (0 = default)
-    int cols = 0, rows = 0;    // terminal size override for --print
-    int frames = 72;           // GIF length
+    bool print = false;         // print one frame to the terminal and exit
+    std::string pngPath;        // render one frame to a PNG and exit
+    std::string gifPath;        // record a turntable animation and exit
+    int width = 0, height = 0;  // image size for --png / --gif (0 = default)
+    int cols = 0, rows = 0;     // terminal size override for --print
+    int frames = 72;            // GIF length
     int gifFps = 24;
-    int blocks = 1;            // draw each pixel as an NxN block ("terminal look")
-    int benchFrames = 0;       // render N frames off-screen and report timings
+    int blocks = 1;       // draw each pixel as an NxN block ("terminal look")
+    int benchFrames = 0;  // render N frames off-screen and report timings
 
     bool showHelp = false, showVersion = false;
 };

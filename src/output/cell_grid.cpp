@@ -32,10 +32,8 @@ std::uint32_t packColor(Color8 c, ColorDepth depth) {
     switch (depth) {
         case ColorDepth::TrueColor:
             return (static_cast<std::uint32_t>(c.r) << 16) | (static_cast<std::uint32_t>(c.g) << 8) | c.b;
-        case ColorDepth::Indexed256:
-            return kIndexedFlag | static_cast<std::uint32_t>(nearestXterm256(c));
-        default:
-            return kDefaultColor;
+        case ColorDepth::Indexed256: return kIndexedFlag | static_cast<std::uint32_t>(nearestXterm256(c));
+        default: return kDefaultColor;
     }
 }
 

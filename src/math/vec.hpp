@@ -17,7 +17,9 @@ constexpr float radians(float degrees) { return degrees * (kPi / 180.0f); }
 constexpr float degrees(float radians) { return radians * (180.0f / kPi); }
 
 template <typename T>
-constexpr T lerp(const T& a, const T& b, float t) { return a + (b - a) * t; }
+constexpr T lerp(const T& a, const T& b, float t) {
+    return a + (b - a) * t;
+}
 
 constexpr float saturate(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
 
@@ -82,9 +84,7 @@ constexpr Vec3& operator*=(Vec3& a, float s) { return a = a * s; }
 constexpr Vec3& operator*=(Vec3& a, Vec3 b) { return a = a * b; }
 
 constexpr float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-constexpr Vec3 cross(Vec3 a, Vec3 b) {
-    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-}
+constexpr Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
 inline float length(Vec3 a) { return std::sqrt(dot(a, a)); }
 constexpr float lengthSquared(Vec3 a) { return dot(a, a); }
 
@@ -99,12 +99,8 @@ inline Vec3 normalize(Vec3 a, Vec3 fallback = {0.0f, 0.0f, 1.0f}) {
 // Mirror the incident direction `i` about the unit normal `n`.
 constexpr Vec3 reflect(Vec3 i, Vec3 n) { return i - n * (2.0f * dot(i, n)); }
 
-constexpr Vec3 min(Vec3 a, Vec3 b) {
-    return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)};
-}
-constexpr Vec3 max(Vec3 a, Vec3 b) {
-    return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
-}
+constexpr Vec3 min(Vec3 a, Vec3 b) { return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)}; }
+constexpr Vec3 max(Vec3 a, Vec3 b) { return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)}; }
 constexpr Vec3 saturate(Vec3 a) { return {saturate(a.x), saturate(a.y), saturate(a.z)}; }
 
 // ---------------------------------------------------------------- Vec4 ----
@@ -118,9 +114,7 @@ struct Vec4 {
     constexpr Vec4(Vec3 xyz, float w_) : x(xyz.x), y(xyz.y), z(xyz.z), w(w_) {}
 
     constexpr float& operator[](int i) { return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w)); }
-    constexpr float operator[](int i) const {
-        return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w));
-    }
+    constexpr float operator[](int i) const { return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w)); }
     constexpr bool operator==(const Vec4&) const = default;
     constexpr Vec3 xyz() const { return {x, y, z}; }
     constexpr Vec2 xy() const { return {x, y}; }

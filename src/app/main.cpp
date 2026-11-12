@@ -78,8 +78,8 @@ int runGif(const Options& options, const Model& model, ThreadPool& pool) {
         std::fprintf(stderr, "termesh: could not write '%s'\n", options.gifPath.c_str());
         return 1;
     }
-    std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width,
-                 frames[0].height, options.frames);
+    std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width, frames[0].height,
+                 options.frames);
     return 0;
 }
 

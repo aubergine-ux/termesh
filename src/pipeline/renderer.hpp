@@ -47,8 +47,7 @@ public:
 
     // Clears the framebuffer and draws the model. The framebuffer must not
     // exceed kMaxFramebufferPixels.
-    RenderStats render(const Model& model, const Camera& camera, const RenderSettings& settings,
-                       Framebuffer& fb);
+    RenderStats render(const Model& model, const Camera& camera, const RenderSettings& settings, Framebuffer& fb);
 
     // Tiles are small enough to stay in cache and to load-balance well across
     // threads even in an 80-column terminal.

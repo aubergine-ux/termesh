@@ -11,9 +11,9 @@ namespace termesh {
 
 const char* shadingModeName(ShadingMode mode) {
     switch (mode) {
-        case ShadingMode::Flat:    return "flat";
+        case ShadingMode::Flat: return "flat";
         case ShadingMode::Gouraud: return "gouraud";
-        default:                   return "phong";
+        default: return "phong";
     }
 }
 
@@ -29,7 +29,7 @@ namespace {
 //   Phong           lighting happens per pixel, so the varyings carry its
 //                   inputs: normal, world position and tangent.
 constexpr int kUV = 0;
-constexpr int kDiffuse = 2, kSpecular = 5;          // Flat / Gouraud
+constexpr int kDiffuse = 2, kSpecular = 5;            // Flat / Gouraud
 constexpr int kNormal = 2, kWorld = 5, kTangent = 8;  // Phong
 constexpr int kLitVaryingCount = 8;
 constexpr int kPhongVaryingCount = 11;
@@ -76,16 +76,16 @@ struct FragmentShader {
 
     // Wireframe lines: shaded like the surface they belong to, then
     // lightened so they read against a dark background.
-    bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
-        return shade(tri, frag, out);
-    }
+    bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Color8& out) const { return shade(tri, frag, out); }
 
     bool passesAlphaTest(const RasterTriangle& tri, const Fragment& frag) const {
         const Material& material = model->materials[tri.material];
         if (material.alphaMode != AlphaMode::Mask) return true;
         float alpha = material.baseColor.w;
         if (material.baseColorTexture >= 0)
-            alpha *= model->textures[material.baseColorTexture].sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod).w;
+            alpha *= model->textures[material.baseColorTexture]
+                         .sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod)
+                         .w;
         return alpha >= material.alphaCutoff;
     }
 
@@ -164,8 +164,8 @@ struct FragmentShader {
 // --------------------------------------------------------- primitive setup ---
 
 struct SetupContext {
-    float width, height;         // framebuffer size
-    std::int32_t maxX, maxY;     // ...in fixed point
+    float width, height;      // framebuffer size
+    std::int32_t maxX, maxY;  // ...in fixed point
     bool cullBackfaces;
     int varyingCount;
 };
@@ -178,8 +178,8 @@ struct TriangleInfo {
 
 // Project three clip-space vertices to the screen and append the resulting
 // triangle, unless it is back-facing or degenerate.
-void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const TriangleInfo& info,
-                  const SetupContext& ctx, std::vector<RasterTriangle>& out) {
+void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const TriangleInfo& info, const SetupContext& ctx,
+                  std::vector<RasterTriangle>& out) {
     std::int32_t x[3], y[3];
     float z[3], invW[3];
     for (int i = 0; i < 3; ++i) {
@@ -241,10 +241,8 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
         const float* uv0 = tri.varyings[0];
         const float* uv1 = tri.varyings[1];
         const float* uv2 = tri.varyings[2];
-        const float uvArea = std::abs((uv1[0] - uv0[0]) * (uv2[1] - uv0[1]) -
-                                      (uv1[1] - uv0[1]) * (uv2[0] - uv0[0]));
-        const float pixelArea =
-            static_cast<float>(area < 0 ? -area : area) / (kSubpixelScale * kSubpixelScale);
+        const float uvArea = std::abs((uv1[0] - uv0[0]) * (uv2[1] - uv0[1]) - (uv1[1] - uv0[1]) * (uv2[0] - uv0[0]));
+        const float pixelArea = static_cast<float>(area < 0 ? -area : area) / (kSubpixelScale * kSubpixelScale);
         tri.lod = uvArea > 0.0f ? 0.5f * std::log2(uvArea / pixelArea) : 0.0f;
     }
 }
@@ -291,8 +289,7 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
         // share it.
         auto t0 = std::chrono::steady_clock::now();
         clipVertices_.resize(mesh.vertices.size());
-        const int vertexChunks =
-            static_cast<int>((mesh.vertices.size() + kVerticesPerChunk - 1) / kVerticesPerChunk);
+        const int vertexChunks = static_cast<int>((mesh.vertices.size() + kVerticesPerChunk - 1) / kVerticesPerChunk);
         pool_.parallelFor(vertexChunks, [&](int chunk) {
             const std::size_t begin = static_cast<std::size_t>(chunk) * kVerticesPerChunk;
             const std::size_t end = std::min(begin + kVerticesPerChunk, mesh.vertices.size());
@@ -328,9 +325,8 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
         TriangleInfo meshInfo{};
         meshInfo.material = static_cast<std::uint16_t>(mesh.material);
         meshInfo.twoSided = twoSided;
-        meshInfo.needsLod = mesh.hasUVs &&
-                        (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
-                         material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
+        meshInfo.needsLod = mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
+                                            material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);
 
         pool_.parallelFor(meshChunks, [&](int chunk) {
             TriangleInfo info = meshInfo;  // per-thread copy; tangentSign varies per triangle
@@ -421,8 +417,7 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
             const int tx1 = std::min(std::max({tri.x[0], tri.x[1], tri.x[2]}) >> tileShift, tilesX - 1);
             const int ty1 = std::min(std::max({tri.y[0], tri.y[1], tri.y[2]}) >> tileShift, tilesY - 1);
             for (int ty = ty0; ty <= ty1; ++ty)
-                for (int tx = tx0; tx <= tx1; ++tx)
-                    bins_[static_cast<std::size_t>(ty) * tilesX + tx].push_back(&tri);
+                for (int tx = tx0; tx <= tx1; ++tx) bins_[static_cast<std::size_t>(ty) * tilesX + tx].push_back(&tri);
         }
     }
     stats.setupMs += msSince(t0);

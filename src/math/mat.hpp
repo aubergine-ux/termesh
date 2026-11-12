@@ -19,8 +19,7 @@ struct Mat4 {
     Vec4 c[4];  // columns
 
     // Default-constructs to the identity.
-    constexpr Mat4()
-        : c{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}} {}
+    constexpr Mat4() : c{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}} {}
     constexpr Mat4(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) : c{c0, c1, c2, c3} {}
 
     static constexpr Mat4 identity() { return Mat4{}; }
@@ -33,13 +32,9 @@ struct Mat4 {
     constexpr bool operator==(const Mat4&) const = default;
 };
 
-constexpr Vec4 operator*(const Mat4& m, Vec4 v) {
-    return m.c[0] * v.x + m.c[1] * v.y + m.c[2] * v.z + m.c[3] * v.w;
-}
+constexpr Vec4 operator*(const Mat4& m, Vec4 v) { return m.c[0] * v.x + m.c[1] * v.y + m.c[2] * v.z + m.c[3] * v.w; }
 
-constexpr Mat4 operator*(const Mat4& a, const Mat4& b) {
-    return {a * b.c[0], a * b.c[1], a * b.c[2], a * b.c[3]};
-}
+constexpr Mat4 operator*(const Mat4& a, const Mat4& b) { return {a * b.c[0], a * b.c[1], a * b.c[2], a * b.c[3]}; }
 
 // Transform a position (w = 1). Only valid for affine matrices: the result's
 // w is assumed to stay 1 and is dropped.
@@ -84,7 +79,7 @@ inline Mat4 rotate(Vec3 axis, float angle) {
 // same as projecting onto it, which is what "expressing a point in camera
 // coordinates" means. The translation column then moves the eye to the origin.
 inline Mat4 lookAt(Vec3 eye, Vec3 target, Vec3 up) {
-    const Vec3 back = normalize(eye - target);   // camera looks down -Z
+    const Vec3 back = normalize(eye - target);  // camera looks down -Z
     const Vec3 right = normalize(cross(up, back), {1.0f, 0.0f, 0.0f});
     const Vec3 trueUp = cross(back, right);
     return {

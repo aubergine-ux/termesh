@@ -18,12 +18,8 @@ namespace termesh {
 
 namespace detail {
 
-inline float srgbDecode(float c) {
-    return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-}
-inline float srgbEncode(float c) {
-    return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
-}
+inline float srgbDecode(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+inline float srgbEncode(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
 
 inline constexpr int kEncodeTableSize = 4096;
 

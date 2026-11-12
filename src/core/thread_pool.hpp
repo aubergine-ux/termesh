@@ -34,8 +34,8 @@ private:
 
     std::vector<std::thread> workers_;
     std::mutex mutex_;
-    std::condition_variable wake_;   // workers wait here for a new job
-    std::condition_variable done_;   // the caller waits here for stragglers
+    std::condition_variable wake_;  // workers wait here for a new job
+    std::condition_variable done_;  // the caller waits here for stragglers
 
     // The current job. `generation_` changes whenever a new one is posted so
     // that a worker never runs the same job twice.

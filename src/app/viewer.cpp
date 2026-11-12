@@ -124,8 +124,9 @@ void Viewer::layout() {
     backend_->configure(area_, imageWidth_, imageHeight_);
 
     supersampling_ = options_.supersampling > 0 ? options_.supersampling : backend_->defaultSupersampling();
-    while (supersampling_ > 1 && static_cast<std::int64_t>(imageWidth_) * supersampling_ * imageHeight_ *
-                                         supersampling_ > kMaxFramebufferPixels)
+    while (supersampling_ > 1 &&
+           static_cast<std::int64_t>(imageWidth_) * supersampling_ * imageHeight_ * supersampling_ >
+               kMaxFramebufferPixels)
         --supersampling_;
     framebuffer_.resize(imageWidth_ * supersampling_, imageHeight_ * supersampling_);
 
@@ -139,8 +140,7 @@ void Viewer::drawFrame() {
     const auto now = Clock::now();
     const double dt = std::min(std::chrono::duration<double>(now - lastFrameTime_).count(), 0.1);
     lastFrameTime_ = now;
-    if (autoRotate_ && !dragging_)
-        camera_.yaw += radians(options_.spinSpeed) * static_cast<float>(dt);
+    if (autoRotate_ && !dragging_) camera_.yaw += radians(options_.spinSpeed) * static_cast<float>(dt);
 
     RenderSettings settings = settings_;
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
@@ -302,9 +302,7 @@ void Viewer::handleKey(const KeyEvent& key) {
     const BackendKind before = effectiveBackend();
 
     switch (key.key) {
-        case Key::Escape:
-            running_ = false;
-            return;
+        case Key::Escape: running_ = false; return;
         case Key::Left:
             if (key.shift) camera_.pan(panStep, 0.0f);
             else camera_.orbit(orbitStep, 0.0f);
@@ -321,15 +319,9 @@ void Viewer::handleKey(const KeyEvent& key) {
             if (key.shift) camera_.pan(0.0f, panStep);
             else camera_.orbit(0.0f, -orbitStep);
             break;
-        case Key::PageUp:
-            camera_.zoom(0.8f);
-            break;
-        case Key::PageDown:
-            camera_.zoom(1.25f);
-            break;
-        case Key::Home:
-            resetView();
-            break;
+        case Key::PageUp: camera_.zoom(0.8f); break;
+        case Key::PageDown: camera_.zoom(1.25f); break;
+        case Key::Home: resetView(); break;
         case Key::Character:
             switch (ch) {
                 case U'q': running_ = false; return;
@@ -341,8 +333,10 @@ void Viewer::handleKey(const KeyEvent& key) {
                 case U'L': camera_.pan(-panStep, 0.0f); break;
                 case U'K': camera_.pan(0.0f, -panStep); break;
                 case U'J': camera_.pan(0.0f, panStep); break;
-                case U'+': case U'=': camera_.zoom(0.9f); break;
-                case U'-': case U'_': camera_.zoom(1.0f / 0.9f); break;
+                case U'+':
+                case U'=': camera_.zoom(0.9f); break;
+                case U'-':
+                case U'_': camera_.zoom(1.0f / 0.9f); break;
                 case U' ':
                     autoRotate_ = !autoRotate_;
                     lastFrameTime_ = Clock::now();
@@ -363,7 +357,8 @@ void Viewer::handleKey(const KeyEvent& key) {
                 case U'b': {
                     // Step to the next backend this terminal supports.
                     const auto it = std::find(available_.begin(), available_.end(), baseBackend_);
-                    const std::size_t index = it == available_.end() ? 0 : static_cast<std::size_t>(it - available_.begin());
+                    const std::size_t index =
+                        it == available_.end() ? 0 : static_cast<std::size_t>(it - available_.begin());
                     baseBackend_ = available_[(index + 1) % available_.size()];
                     rebuildBackend();
                     notify(std::string("backend: ") + backendName(backend_->kind()));
@@ -381,8 +376,7 @@ void Viewer::handleKey(const KeyEvent& key) {
                 default: return;  // unbound key: nothing changed
             }
             break;
-        default:
-            return;
+        default: return;
     }
 
     if (effectiveBackend() != before) rebuildBackend();
@@ -434,8 +428,7 @@ void Viewer::handleMouse(const MouseEvent& mouse) {
             dirty_ = true;
             break;
         }
-        case MouseEvent::Type::Move:
-            break;
+        case MouseEvent::Type::Move: break;
     }
 }
 
@@ -443,8 +436,9 @@ void Viewer::handleMouse(const MouseEvent& mouse) {
 
 int Viewer::run() {
     if (!terminal_.enterRawMode()) {
-        std::fprintf(stderr, "termesh: not running in an interactive terminal.\n"
-                             "Use --print, --png or --gif to render without one.\n");
+        std::fprintf(stderr,
+                     "termesh: not running in an interactive terminal.\n"
+                     "Use --print, --png or --gif to render without one.\n");
         return 1;
     }
 

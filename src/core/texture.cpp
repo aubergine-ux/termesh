@@ -14,8 +14,7 @@ namespace {
 // Map a texel index that may lie outside [0, size) back into range.
 int wrapIndex(int i, int size, WrapMode mode) {
     switch (mode) {
-        case WrapMode::Clamp:
-            return std::clamp(i, 0, size - 1);
+        case WrapMode::Clamp: return std::clamp(i, 0, size - 1);
         case WrapMode::Mirror: {
             const int period = 2 * size;
             int m = i % period;
@@ -90,8 +89,7 @@ void Texture::buildMips() {
                         b += t.b;
                         alpha += t.a;
                     }
-                    out = {static_cast<std::uint8_t>((r + 2) / 4),
-                           static_cast<std::uint8_t>((g + 2) / 4),
+                    out = {static_cast<std::uint8_t>((r + 2) / 4), static_cast<std::uint8_t>((g + 2) / 4),
                            static_cast<std::uint8_t>((b + 2) / 4), 255};
                 }
                 out.a = static_cast<std::uint8_t>((alpha + 2) / 4);
@@ -197,10 +195,10 @@ Texture heightToNormalMap(const Texture& height, float strength) {
             // Image rows run downwards but tangent-space +Y points up the texture.
             const float dy = (heightAt(x, y - 1) - heightAt(x, y + 1)) * strength;
             const Vec3 n = normalize(Vec3{-dx, -dy, 1.0f});
-            out[static_cast<std::size_t>(y) * w + x] = {
-                static_cast<std::uint8_t>((n.x * 0.5f + 0.5f) * 255.0f + 0.5f),
-                static_cast<std::uint8_t>((n.y * 0.5f + 0.5f) * 255.0f + 0.5f),
-                static_cast<std::uint8_t>((n.z * 0.5f + 0.5f) * 255.0f + 0.5f), 255};
+            out[static_cast<std::size_t>(y) * w + x] = {static_cast<std::uint8_t>((n.x * 0.5f + 0.5f) * 255.0f + 0.5f),
+                                                        static_cast<std::uint8_t>((n.y * 0.5f + 0.5f) * 255.0f + 0.5f),
+                                                        static_cast<std::uint8_t>((n.z * 0.5f + 0.5f) * 255.0f + 0.5f),
+                                                        255};
         }
     Texture result(w, h, std::move(out), false);
     result.name = height.name;

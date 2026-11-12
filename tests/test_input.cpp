@@ -108,14 +108,15 @@ TEST_CASE("input: alt+key") {
 }
 
 TEST_CASE("input: SGR mouse reports") {
-    const auto events = parse("\x1b[<0;10;5M"     // left press at column 10, row 5
-                              "\x1b[<32;12;6M"    // drag with the left button
-                              "\x1b[<0;12;6m"     // release
-                              "\x1b[<2;1;1M"      // right press
-                              "\x1b[<64;40;20M"   // wheel up
-                              "\x1b[<65;40;20M"   // wheel down
-                              "\x1b[<4;3;3M"      // shift + left press
-                              "\x1b[<35;7;7M");   // motion with no button
+    const auto events = parse(
+        "\x1b[<0;10;5M"    // left press at column 10, row 5
+        "\x1b[<32;12;6M"   // drag with the left button
+        "\x1b[<0;12;6m"    // release
+        "\x1b[<2;1;1M"     // right press
+        "\x1b[<64;40;20M"  // wheel up
+        "\x1b[<65;40;20M"  // wheel down
+        "\x1b[<4;3;3M"     // shift + left press
+        "\x1b[<35;7;7M");  // motion with no button
     REQUIRE(events.size() == 8);
 
     CHECK(asMouse(events[0]).type == MouseEvent::Type::Press);
@@ -136,10 +137,11 @@ TEST_CASE("input: SGR mouse reports") {
 }
 
 TEST_CASE("input: terminal query replies") {
-    const auto events = parse("\x1b_Gi=31;OK\x1b\\"   // kitty graphics supported
-                              "\x1b[6;18;9t"           // cell is 18 px tall, 9 wide
-                              "\x1b[4;540;900t"        // text area 540 x 900 px
-                              "\x1b[?62;4;22c");       // device attributes incl. sixel
+    const auto events = parse(
+        "\x1b_Gi=31;OK\x1b\\"  // kitty graphics supported
+        "\x1b[6;18;9t"         // cell is 18 px tall, 9 wide
+        "\x1b[4;540;900t"      // text area 540 x 900 px
+        "\x1b[?62;4;22c");     // device attributes incl. sixel
     REQUIRE(events.size() == 4);
 
     CHECK(asReply(events[0]).type == ReplyEvent::Type::KittyGraphics);
@@ -162,7 +164,13 @@ TEST_CASE("input: a kitty error reply is not OK") {
 }
 
 TEST_CASE("input: unknown sequences are skipped without derailing the stream") {
-    const auto events = parse("\x1b[?1;2$y" "a" "\x1b[99~" "b" "\x1b[200;1;1;1x" "c");
+    const auto events = parse(
+        "\x1b[?1;2$y"
+        "a"
+        "\x1b[99~"
+        "b"
+        "\x1b[200;1;1;1x"
+        "c");
     REQUIRE(events.size() == 3);
     CHECK(asKey(events[0]).character == U'a');
     CHECK(asKey(events[1]).character == U'b');
@@ -170,7 +178,10 @@ TEST_CASE("input: unknown sequences are skipped without derailing the stream") {
 }
 
 TEST_CASE("input: absurdly long numbers saturate instead of overflowing") {
-    const auto events = parse("\x1b[<0;99999999999999999999;99999999999999999999M" "\x1b[99999999999999999999;1R" "z");
+    const auto events = parse(
+        "\x1b[<0;99999999999999999999;99999999999999999999M"
+        "\x1b[99999999999999999999;1R"
+        "z");
     REQUIRE(events.size() >= 2);
     CHECK(asMouse(events[0]).col > 0);
     CHECK(asMouse(events[0]).row > 0);

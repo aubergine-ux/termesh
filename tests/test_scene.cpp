@@ -138,9 +138,9 @@ TEST_CASE("texture: height maps become normal maps") {
     CHECK(height.isGreyscale());
     const Texture normals = heightToNormalMap(height);
     const Color8 n = normals.pixels()[3 * 8 + 3];
-    CHECK(n.r < 128);                    // x < 0
-    CHECK(std::abs(n.g - 128) <= 1);     // y = 0
-    CHECK(n.b > 128);                    // z > 0
+    CHECK(n.r < 128);                 // x < 0
+    CHECK(std::abs(n.g - 128) <= 1);  // y = 0
+    CHECK(n.b > 128);                 // z > 0
     CHECK_FALSE(normals.isGreyscale());
 }
 
@@ -297,24 +297,23 @@ TEST_CASE("obj: positions, uvs, normals, quads and materials") {
               "newmtl plain\n"
               "Kd 0.2 0.2 0.2\n"
               "d 1.0\n");
-    const std::string path = dir.write(
-        "cube.obj",
-        "mtllib cube.mtl\r\n"   // Windows line endings must not confuse the parser
-        "v -1 -1 0\n"
-        "v  1 -1 0\n"
-        "v  1  1 0\n"
-        "v -1  1 0\n"
-        "v  0  0 2   # apex\n"
-        "vt 0 0\n"
-        "vt 1 0\n"
-        "vt 1 1\n"
-        "vt 0 1\n"
-        "vn 0 0 1\n"
-        "usemtl painted\n"
-        "f 1/1/1 2/2/1 3/3/1 4/4/1\n"   // a quad: two triangles
-        "usemtl plain\n"
-        "f -5 -4 -1\n"                  // negative (relative) indices, no uv / normal
-        "f 2//1 3//1 5//1\n");          // position//normal form
+    const std::string path = dir.write("cube.obj",
+                                       "mtllib cube.mtl\r\n"  // Windows line endings must not confuse the parser
+                                       "v -1 -1 0\n"
+                                       "v  1 -1 0\n"
+                                       "v  1  1 0\n"
+                                       "v -1  1 0\n"
+                                       "v  0  0 2   # apex\n"
+                                       "vt 0 0\n"
+                                       "vt 1 0\n"
+                                       "vt 1 1\n"
+                                       "vt 0 1\n"
+                                       "vn 0 0 1\n"
+                                       "usemtl painted\n"
+                                       "f 1/1/1 2/2/1 3/3/1 4/4/1\n"  // a quad: two triangles
+                                       "usemtl plain\n"
+                                       "f -5 -4 -1\n"          // negative (relative) indices, no uv / normal
+                                       "f 2//1 3//1 5//1\n");  // position//normal form
 
     const LoadResult result = loadModel(path);
     REQUIRE_MESSAGE(result.ok, result.error);
@@ -340,7 +339,7 @@ TEST_CASE("obj: positions, uvs, normals, quads and materials") {
     CHECK(model.textures[mat.baseColorTexture].width() == 2);
     CHECK(mat.baseColor.x == Approx(1.0f));
     CHECK(mat.baseColor.y == Approx(0.214f).epsilon(0.01));  // 0.5 sRGB in linear
-    CHECK(mat.roughness < 0.6f);                              // Ns 96 is fairly glossy
+    CHECK(mat.roughness < 0.6f);                             // Ns 96 is fairly glossy
 
     const Mesh& plain = model.meshes[1];
     CHECK(model.materials[plain.material].name == "plain");

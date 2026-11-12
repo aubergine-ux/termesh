@@ -35,8 +35,6 @@ struct Image {
     ImageView view() const { return {pixels.data(), width, height}; }
 };
 
-inline ImageView viewOf(const Framebuffer& fb) {
-    return {fb.pixels().data(), fb.width(), fb.height()};
-}
+inline ImageView viewOf(const Framebuffer& fb) { return {fb.pixels().data(), fb.width(), fb.height()}; }
 
 }  // namespace termesh

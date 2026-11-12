@@ -100,9 +100,7 @@ inline constexpr const char* kName = "scalar";
 struct Int4 {
     std::int32_t v[4];
     static Int4 splat(std::int32_t x) { return {{x, x, x, x}}; }
-    static Int4 set(std::int32_t a, std::int32_t b, std::int32_t c, std::int32_t d) {
-        return {{a, b, c, d}};
-    }
+    static Int4 set(std::int32_t a, std::int32_t b, std::int32_t c, std::int32_t d) { return {{a, b, c, d}}; }
     void store(std::int32_t* out) const {
         for (int i = 0; i < 4; ++i) out[i] = v[i];
     }
@@ -111,8 +109,7 @@ struct Int4 {
 inline Int4 operator+(Int4 a, Int4 b) {
     Int4 r;
     for (int i = 0; i < 4; ++i)
-        r.v[i] = static_cast<std::int32_t>(static_cast<std::uint32_t>(a.v[i]) +
-                                           static_cast<std::uint32_t>(b.v[i]));
+        r.v[i] = static_cast<std::int32_t>(static_cast<std::uint32_t>(a.v[i]) + static_cast<std::uint32_t>(b.v[i]));
     return r;
 }
 inline Int4 operator|(Int4 a, Int4 b) {
@@ -126,8 +123,8 @@ struct Float4 {
     static Float4 splat(float x) { return {{x, x, x, x}}; }
     static Float4 load(const float* p) { return {{p[0], p[1], p[2], p[3]}}; }
     static Float4 fromInt(Int4 i) {
-        return {{static_cast<float>(i.v[0]), static_cast<float>(i.v[1]),
-                 static_cast<float>(i.v[2]), static_cast<float>(i.v[3])}};
+        return {{static_cast<float>(i.v[0]), static_cast<float>(i.v[1]), static_cast<float>(i.v[2]),
+                 static_cast<float>(i.v[3])}};
     }
     void store(float* out) const {
         for (int i = 0; i < 4; ++i) out[i] = v[i];

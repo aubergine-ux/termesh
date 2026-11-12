@@ -97,8 +97,7 @@ std::size_t InputParser::parseOne(std::vector<InputEvent>& out) {
         return 1;  // stray continuation byte: skip
     }
     if (buffer_.size() < length) return 0;
-    for (std::size_t i = 1; i < length; ++i)
-        cp = (cp << 6) | (static_cast<unsigned char>(buffer_[i]) & 0x3F);
+    for (std::size_t i = 1; i < length; ++i) cp = (cp << 6) | (static_cast<unsigned char>(buffer_[i]) & 0x3F);
 
     KeyEvent key;
     key.character = cp;
@@ -243,8 +242,10 @@ std::size_t InputParser::parseCsi(std::vector<InputEvent>& out) {
         // Keys identified by number:  ESC [ <n> ; <mod> ~
         bool known = true;
         switch (param(0, 0)) {
-            case 1: case 7: key.key = Key::Home; break;
-            case 4: case 8: key.key = Key::End; break;
+            case 1:
+            case 7: key.key = Key::Home; break;
+            case 4:
+            case 8: key.key = Key::End; break;
             case 5: key.key = Key::PageUp; break;
             case 6: key.key = Key::PageDown; break;
             default: known = false;

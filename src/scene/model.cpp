@@ -103,8 +103,7 @@ void finalizeModel(Model& model) {
         if (mesh.material < 0 || mesh.material >= count) mesh.material = 0;
     const int textures = static_cast<int>(model.textures.size());
     for (Material& m : model.materials) {
-        for (int* slot : {&m.baseColorTexture, &m.normalTexture, &m.emissiveTexture,
-                          &m.metallicRoughnessTexture})
+        for (int* slot : {&m.baseColorTexture, &m.normalTexture, &m.emissiveTexture, &m.metallicRoughnessTexture})
             if (*slot >= textures || (*slot >= 0 && model.textures[*slot].empty())) *slot = -1;
     }
 }

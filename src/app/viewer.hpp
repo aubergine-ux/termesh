@@ -35,8 +35,8 @@ private:
 
     // --- output ---
     BackendKind effectiveBackend() const;
-    void rebuildBackend();   // (re)create the backend for the current mode
-    void layout();           // recompute sizes after a resize or mode change
+    void rebuildBackend();  // (re)create the backend for the current mode
+    void layout();          // recompute sizes after a resize or mode change
     void drawFrame();
     void drawStatusBar(std::string& out);
     void drawHelp(std::string& out);
@@ -56,7 +56,7 @@ private:
 
     std::unique_ptr<Backend> backend_;
     BackendKind baseBackend_ = BackendKind::HalfBlock;  // what the user selected
-    std::vector<BackendKind> available_;                 // for cycling with 'b'
+    std::vector<BackendKind> available_;                // for cycling with 'b'
     DrawArea area_;
     int imageWidth_ = 0, imageHeight_ = 0, supersampling_ = 1;
     Framebuffer framebuffer_;
@@ -67,7 +67,7 @@ private:
     float lightYaw_ = 0.0f;
 
     bool running_ = true;
-    bool dirty_ = true;        // the picture needs redrawing
+    bool dirty_ = true;  // the picture needs redrawing
     bool autoRotate_ = true;
     bool showStats_ = true;
     bool showHelp_ = false;

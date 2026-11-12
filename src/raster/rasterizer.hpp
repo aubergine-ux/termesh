@@ -37,10 +37,10 @@ struct RasterTriangle {
     float z[3];               // depth in [0, 1], 0 = near plane
     float invW[3];            // 1 / clip-space w, for perspective correction
     float varyings[3][kMaxVaryings];
-    float lod;                // texture level-of-detail bias for the whole triangle
-    float tangentSign;        // handedness of the tangent frame (+1 / -1)
+    float lod;          // texture level-of-detail bias for the whole triangle
+    float tangentSign;  // handedness of the tangent frame (+1 / -1)
     std::uint16_t material;
-    std::uint8_t edgeMask;    // bit i set: the edge opposite vertex i is a real mesh edge
+    std::uint8_t edgeMask;  // bit i set: the edge opposite vertex i is a real mesh edge
     bool backFacing;
 };
 
@@ -57,10 +57,9 @@ struct TileRect {
 // Twice the signed area of the triangle (a, b, p). Positive when p is on the
 // interior side of the directed edge a -> b for a positively-oriented
 // triangle.
-constexpr std::int64_t edgeFunction(std::int32_t ax, std::int32_t ay, std::int32_t bx,
-                                    std::int32_t by, std::int32_t px, std::int32_t py) {
-    return static_cast<std::int64_t>(bx - ax) * (py - ay) -
-           static_cast<std::int64_t>(by - ay) * (px - ax);
+constexpr std::int64_t edgeFunction(std::int32_t ax, std::int32_t ay, std::int32_t bx, std::int32_t by, std::int32_t px,
+                                    std::int32_t py) {
+    return static_cast<std::int64_t>(bx - ax) * (py - ay) - static_cast<std::int64_t>(by - ay) * (px - ax);
 }
 
 // The top-left fill rule. A pixel centre lying exactly on an edge shared by
@@ -84,8 +83,8 @@ constexpr bool isTopLeftEdge(std::int32_t ax, std::int32_t ay, std::int32_t bx, 
 //     bool  operator()(const RasterTriangle&, const Fragment&, Color8& out) const;
 //                                         return false to discard the pixel
 template <typename Shader>
-void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles,
-                   std::size_t count, const Shader& shader) {
+void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles, std::size_t count,
+                   const Shader& shader) {
     using simd::Float4;
     using simd::Int4;
 
@@ -141,8 +140,7 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
         // one opposite vertex i, so E_i grows from 0 on that edge to the full
         // triangle area at vertex i. Dividing by the area therefore gives the
         // barycentric weight of vertex i:  l_i = E_i / area,  l0 + l1 + l2 = 1.
-        const std::int64_t area =
-            edgeFunction(tri.x[0], tri.y[0], tri.x[1], tri.y[1], tri.x[2], tri.y[2]);
+        const std::int64_t area = edgeFunction(tri.x[0], tri.y[0], tri.x[1], tri.y[1], tri.x[2], tri.y[2]);
         const float invArea = 1.0f / static_cast<float>(area);
 
         // Depth as a plane equation over the barycentrics:
@@ -162,8 +160,10 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
         // reliably while lines on genuinely hidden surfaces still lose.
         float offset = 0.0f;
         if (slopeBias > 0.0f) {
-            const float dzdx = std::abs(dz1Scalar * static_cast<float>(stepX[1]) + dz2Scalar * static_cast<float>(stepX[2]));
-            const float dzdy = std::abs(dz1Scalar * static_cast<float>(stepY[1]) + dz2Scalar * static_cast<float>(stepY[2]));
+            const float dzdx =
+                std::abs(dz1Scalar * static_cast<float>(stepX[1]) + dz2Scalar * static_cast<float>(stepX[2]));
+            const float dzdy =
+                std::abs(dz1Scalar * static_cast<float>(stepY[1]) + dz2Scalar * static_cast<float>(stepY[2]));
             offset = slopeBias * (dzdx + dzdy) + 1e-5f;
         }
 
@@ -262,8 +262,7 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
 
                     Fragment frag;
                     for (int k = 0; k < varyingCount; ++k)
-                        frag.varyings[k] = b0 * tri.varyings[0][k] + b1 * tri.varyings[1][k] +
-                                           b2 * tri.varyings[2][k];
+                        frag.varyings[k] = b0 * tri.varyings[0][k] + b1 * tri.varyings[1][k] + b2 * tri.varyings[2][k];
 
                     Color8 color;
                     if (!shader(tri, frag, color)) continue;  // discarded (alpha cut-out)

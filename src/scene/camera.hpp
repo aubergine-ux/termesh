@@ -42,8 +42,7 @@ public:
     // camera's own X axis, then yaw about the world's Y axis. Composing them
     // this way keeps the horizon level however far you orbit.
     Quat orientation() const {
-        return Quat::fromAxisAngle({0.0f, 1.0f, 0.0f}, yaw) *
-               Quat::fromAxisAngle({1.0f, 0.0f, 0.0f}, -pitch);
+        return Quat::fromAxisAngle({0.0f, 1.0f, 0.0f}, yaw) * Quat::fromAxisAngle({1.0f, 0.0f, 0.0f}, -pitch);
     }
 
     Vec3 position() const { return target + rotate(orientation(), {0.0f, 0.0f, distance}); }
@@ -65,9 +64,7 @@ public:
     }
 
     // factor < 1 moves closer.
-    void zoom(float factor) {
-        distance = std::clamp(distance * factor, sceneRadius_ * 0.02f, sceneRadius_ * 100.0f);
-    }
+    void zoom(float factor) { distance = std::clamp(distance * factor, sceneRadius_ * 0.02f, sceneRadius_ * 100.0f); }
 
     // `aspect` is the width / height of the image as displayed.
     Camera camera(float aspect) const {

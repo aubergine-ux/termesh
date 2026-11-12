@@ -21,8 +21,7 @@ struct ScreenVertex {
 bool makeTriangle(ScreenVertex a, ScreenVertex b, ScreenVertex c, RasterTriangle& tri) {
     ScreenVertex v[3] = {a, b, c};
     auto fixed = [](float f) { return static_cast<std::int32_t>(std::floor(f * kSubpixelScale + 0.5f)); };
-    if (edgeFunction(fixed(a.x), fixed(a.y), fixed(b.x), fixed(b.y), fixed(c.x), fixed(c.y)) < 0)
-        std::swap(v[1], v[2]);
+    if (edgeFunction(fixed(a.x), fixed(a.y), fixed(b.x), fixed(b.y), fixed(c.x), fixed(c.y)) < 0) std::swap(v[1], v[2]);
     tri = {};
     for (int i = 0; i < 3; ++i) {
         tri.x[i] = fixed(v[i].x);
@@ -106,8 +105,7 @@ TEST_CASE("raster: triangles sharing an edge never overlap or leave gaps") {
             for (int t = 0; t < 2; ++t) {
                 Framebuffer fb = blank(64, 64);
                 RasterTriangle tri;
-                if (!makeTriangle(q[tris[split][t][0]], q[tris[split][t][1]], q[tris[split][t][2]], tri))
-                    continue;
+                if (!makeTriangle(q[tris[split][t][0]], q[tris[split][t][1]], q[tris[split][t][2]], tri)) continue;
                 draw(fb, tri);
                 for (int i = 0; i < 64 * 64; ++i) hits[split][i] += fb.pixels()[i].a != 0;
             }
@@ -239,8 +237,7 @@ TEST_CASE("raster: splitting the screen into tiles does not change the image") {
     // Odd-sized tiles, so SIMD groups get cut at awkward places.
     for (int y = 0; y < 100; y += 13)
         for (int x = 0; x < 100; x += 7)
-            rasterizeTile(tiled, {x, y, std::min(x + 7, 100), std::min(y + 13, 100)}, list.data(),
-                          list.size(), shader);
+            rasterizeTile(tiled, {x, y, std::min(x + 7, 100), std::min(y + 13, 100)}, list.data(), list.size(), shader);
     CHECK(whole.pixels() == tiled.pixels());
 }
 
@@ -284,7 +281,8 @@ TEST_CASE("lines: shared edges, edge flags, width and tiling") {
     auto sharedEdgeOnly = [&](RasterTriangle tri) {
         tri.edgeMask = 0;
         for (int e = 0; e < 3; ++e)
-            if (isEndpoint(tri, (e + 1) % 3) && isEndpoint(tri, (e + 2) % 3)) tri.edgeMask = static_cast<std::uint8_t>(1 << e);
+            if (isEndpoint(tri, (e + 1) % 3) && isEndpoint(tri, (e + 2) % 3))
+                tri.edgeMask = static_cast<std::uint8_t>(1 << e);
         return tri;
     };
     const RasterTriangle a = sharedEdgeOnly(left), b = sharedEdgeOnly(right);

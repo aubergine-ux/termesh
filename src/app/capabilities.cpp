@@ -34,10 +34,9 @@ TerminalCaps capsFromEnvironment() {
     if (!env("NO_COLOR").empty() || term == "dumb") {
         caps.color = ColorDepth::None;
     } else if (containsIgnoreCase(colorterm, "truecolor") || containsIgnoreCase(colorterm, "24bit") ||
-               !env("WT_SESSION").empty() || containsIgnoreCase(term, "direct") ||
-               containsIgnoreCase(term, "kitty") || containsIgnoreCase(term, "ghostty") ||
-               containsIgnoreCase(term, "alacritty") || containsIgnoreCase(term, "wezterm") ||
-               containsIgnoreCase(term, "foot")) {
+               !env("WT_SESSION").empty() || containsIgnoreCase(term, "direct") || containsIgnoreCase(term, "kitty") ||
+               containsIgnoreCase(term, "ghostty") || containsIgnoreCase(term, "alacritty") ||
+               containsIgnoreCase(term, "wezterm") || containsIgnoreCase(term, "foot")) {
         caps.color = ColorDepth::TrueColor;
     } else if (containsIgnoreCase(term, "256color")) {
         caps.color = ColorDepth::Indexed256;
@@ -92,8 +91,7 @@ void probeTerminal(Terminal& terminal, InputParser& parser, TerminalCaps& caps, 
     bool done = false;
 
     while (!done) {
-        const auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
         if (remaining <= 0) break;
         bytes.clear();
         if (!terminal.read(bytes, static_cast<int>(remaining))) break;
@@ -104,9 +102,7 @@ void probeTerminal(Terminal& terminal, InputParser& parser, TerminalCaps& caps, 
             const auto* reply = std::get_if<ReplyEvent>(&event);
             if (!reply) continue;  // a key typed during start-up: ignore
             switch (reply->type) {
-                case ReplyEvent::Type::KittyGraphics:
-                    caps.kittyGraphics = reply->ok;
-                    break;
+                case ReplyEvent::Type::KittyGraphics: caps.kittyGraphics = reply->ok; break;
                 case ReplyEvent::Type::CellSize:
                     if (reply->params.size() >= 2 && reply->params[0] > 0 && reply->params[1] > 0) {
                         caps.cellHeight = reply->params[0];

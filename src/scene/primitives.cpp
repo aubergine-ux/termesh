@@ -64,12 +64,12 @@ Model makeCube() {
     model.name = "cube";
     Mesh mesh;
     mesh.hasUVs = true;
-    addQuad(mesh, {-1, -1, 1}, {2, 0, 0}, {0, 2, 0});    // +Z
-    addQuad(mesh, {1, -1, -1}, {-2, 0, 0}, {0, 2, 0});   // -Z
-    addQuad(mesh, {1, -1, 1}, {0, 0, -2}, {0, 2, 0});    // +X
-    addQuad(mesh, {-1, -1, -1}, {0, 0, 2}, {0, 2, 0});   // -X
-    addQuad(mesh, {-1, 1, 1}, {2, 0, 0}, {0, 0, -2});    // +Y
-    addQuad(mesh, {-1, -1, -1}, {2, 0, 0}, {0, 0, 2});   // -Y
+    addQuad(mesh, {-1, -1, 1}, {2, 0, 0}, {0, 2, 0});   // +Z
+    addQuad(mesh, {1, -1, -1}, {-2, 0, 0}, {0, 2, 0});  // -Z
+    addQuad(mesh, {1, -1, 1}, {0, 0, -2}, {0, 2, 0});   // +X
+    addQuad(mesh, {-1, -1, -1}, {0, 0, 2}, {0, 2, 0});  // -X
+    addQuad(mesh, {-1, 1, 1}, {2, 0, 0}, {0, 0, -2});   // +Y
+    addQuad(mesh, {-1, -1, -1}, {2, 0, 0}, {0, 0, 2});  // -Y
     computeTangents(mesh);
     model.meshes.push_back(std::move(mesh));
 

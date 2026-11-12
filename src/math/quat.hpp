@@ -89,8 +89,7 @@ inline Quat slerp(Quat a, Quat b, float t) {
         wa = std::sin((1.0f - t) * theta) * invSin;
         wb = std::sin(t * theta) * invSin;
     }
-    return normalize(Quat{a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb,
-                          a.w * wa + b.w * wb});
+    return normalize(Quat{a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb, a.w * wa + b.w * wb});
 }
 
 }  // namespace termesh

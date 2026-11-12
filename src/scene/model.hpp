@@ -35,7 +35,7 @@ struct Material {
     int normalTexture = -1;
     int emissiveTexture = -1;
     int metallicRoughnessTexture = -1;  // G = roughness, B = metallic (glTF)
-    bool occlusionInRed = false;         // ...and R = ambient occlusion
+    bool occlusionInRed = false;        // ...and R = ambient occlusion
 
     AlphaMode alphaMode = AlphaMode::Opaque;
     float alphaCutoff = 0.5f;

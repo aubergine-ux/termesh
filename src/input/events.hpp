@@ -11,9 +11,18 @@ namespace termesh {
 
 enum class Key {
     Character,  // a printable character; see KeyEvent::character
-    Up, Down, Left, Right,
-    PageUp, PageDown, Home, End,
-    Enter, Tab, Backspace, Escape,
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    Enter,
+    Tab,
+    Backspace,
+    Escape,
 };
 
 struct KeyEvent {

@@ -330,17 +330,17 @@ std::unique_ptr<Backend> makeSixelBackend() { return std::make_unique<SixelBacke
 
 const char* backendName(BackendKind kind) {
     switch (kind) {
-        case BackendKind::Kitty:     return "kitty";
-        case BackendKind::Sixel:     return "sixel";
+        case BackendKind::Kitty: return "kitty";
+        case BackendKind::Sixel: return "sixel";
         case BackendKind::HalfBlock: return "halfblock";
-        case BackendKind::Braille:   return "braille";
-        default:                     return "ascii";
+        case BackendKind::Braille: return "braille";
+        default: return "ascii";
     }
 }
 
 std::optional<BackendKind> backendFromName(std::string_view name) {
-    for (BackendKind kind : {BackendKind::Kitty, BackendKind::Sixel, BackendKind::HalfBlock,
-                             BackendKind::Braille, BackendKind::Ascii})
+    for (BackendKind kind :
+         {BackendKind::Kitty, BackendKind::Sixel, BackendKind::HalfBlock, BackendKind::Braille, BackendKind::Ascii})
         if (name == backendName(kind)) return kind;
     if (name == "half-block" || name == "blocks") return BackendKind::HalfBlock;
     return std::nullopt;
@@ -348,11 +348,11 @@ std::optional<BackendKind> backendFromName(std::string_view name) {
 
 std::unique_ptr<Backend> makeBackend(BackendKind kind, ColorDepth color) {
     switch (kind) {
-        case BackendKind::Kitty:     return makeKittyBackend();
-        case BackendKind::Sixel:     return makeSixelBackend();
+        case BackendKind::Kitty: return makeKittyBackend();
+        case BackendKind::Sixel: return makeSixelBackend();
         case BackendKind::HalfBlock: return makeHalfBlockBackend(color);
-        case BackendKind::Braille:   return makeBrailleBackend(color);
-        default:                     return makeAsciiBackend(color);
+        case BackendKind::Braille: return makeBrailleBackend(color);
+        default: return makeAsciiBackend(color);
     }
 }
 

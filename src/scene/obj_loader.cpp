@@ -202,16 +202,14 @@ struct ObjContext {
                 // A base colour texture with holes in it is a cut-out.
                 if (current->baseColorTexture >= 0) {
                     const auto& pixels = result.model.textures[current->baseColorTexture].pixels();
-                    const bool hasHoles = std::any_of(pixels.begin(), pixels.end(),
-                                                      [](Color8 c) { return c.a < 128; });
+                    const bool hasHoles = std::any_of(pixels.begin(), pixels.end(), [](Color8 c) { return c.a < 128; });
                     if (hasHoles) current->alphaMode = AlphaMode::Mask;
                 }
             } else if (key == "map_Ke") {
                 current->emissiveTexture = texture(parseTextureStatement(line), true, false);
                 if (current->emissiveTexture >= 0 && lengthSquared(current->emissive) == 0.0f)
                     current->emissive = Vec3(1.0f);
-            } else if (key == "map_Bump" || key == "map_bump" || key == "bump" || key == "norm" ||
-                       key == "map_Kn") {
+            } else if (key == "map_Bump" || key == "map_bump" || key == "bump" || key == "norm" || key == "map_Kn") {
                 float scale = 1.0f;
                 const std::string name = parseTextureStatement(line, &scale);
                 current->normalTexture = texture(name, false, true);
@@ -274,7 +272,8 @@ LoadResult loadObj(const std::string& path) {
     // array as it stands when the face is read.
     auto resolveIndex = [](long index, std::size_t count) -> int {
         if (index > 0) return index <= static_cast<long>(count) ? static_cast<int>(index - 1) : -1;
-        if (index < 0) return -index <= static_cast<long>(count) ? static_cast<int>(static_cast<long>(count) + index) : -1;
+        if (index < 0)
+            return -index <= static_cast<long>(count) ? static_cast<int>(static_cast<long>(count) + index) : -1;
         return -1;
     };
 

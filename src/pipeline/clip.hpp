@@ -32,12 +32,12 @@ enum ClipPlane : unsigned {
 // positive inside, negative outside, zero on the plane.
 constexpr float clipDistance(Vec4 p, unsigned plane) {
     switch (plane) {
-        case kClipLeft:   return p.w + p.x;
-        case kClipRight:  return p.w - p.x;
+        case kClipLeft: return p.w + p.x;
+        case kClipRight: return p.w - p.x;
         case kClipBottom: return p.w + p.y;
-        case kClipTop:    return p.w - p.y;
-        case kClipNear:   return p.w + p.z;
-        default:          return p.w - p.z;  // kClipFar
+        case kClipTop: return p.w - p.y;
+        case kClipNear: return p.w + p.z;
+        default: return p.w - p.z;  // kClipFar
     }
 }
 

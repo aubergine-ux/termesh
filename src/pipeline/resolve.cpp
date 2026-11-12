@@ -32,8 +32,7 @@ void resolve(const Framebuffer& src, int factor, Image& dst, ThreadPool& pool) {
                         alpha += in[sx].a;
                     }
                 }
-                out[x] = linearToSrgb(sum * scale,
-                                      static_cast<std::uint8_t>(static_cast<float>(alpha) * scale + 0.5f));
+                out[x] = linearToSrgb(sum * scale, static_cast<std::uint8_t>(static_cast<float>(alpha) * scale + 0.5f));
             }
         }
     });

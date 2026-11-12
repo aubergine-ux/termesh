@@ -58,7 +58,7 @@ bool Terminal::enterRawMode() {
     state_->raw = true;
 
     // Signals from outside still need to end the main loop cleanly.
-    struct sigaction action {};
+    struct sigaction action{};
     action.sa_handler = onQuitSignal;
     sigemptyset(&action.sa_mask);
     sigaction(SIGINT, &action, nullptr);

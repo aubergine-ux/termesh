@@ -31,7 +31,7 @@ WrapMode wrapModeFromGl(cgltf_int mode) {
     switch (mode) {
         case 33071: return WrapMode::Clamp;   // CLAMP_TO_EDGE
         case 33648: return WrapMode::Mirror;  // MIRRORED_REPEAT
-        default:    return WrapMode::Repeat;
+        default: return WrapMode::Repeat;
     }
 }
 
@@ -63,8 +63,7 @@ struct GltfContext {
             while (length > 0 && base64[length - 1] == '=') --length;
             const std::size_t size = length * 3 / 4;
             void* decoded = nullptr;
-            if (cgltf_load_buffer_base64(options, size, base64, &decoded) != cgltf_result_success)
-                return {};
+            if (cgltf_load_buffer_base64(options, size, base64, &decoded) != cgltf_result_success) return {};
             Texture tex = loadTextureFromMemory(static_cast<const unsigned char*>(decoded), size, srgb);
             std::free(decoded);
             return tex;
@@ -88,7 +87,9 @@ struct GltfContext {
         if (image) {
             Texture decoded = decodeImage(*image, srgb);
             if (decoded.empty()) {
-                const char* name = image->name ? image->name : (image->uri && std::strncmp(image->uri, "data:", 5) != 0 ? image->uri : "(embedded)");
+                const char* name =
+                    image->name ? image->name
+                                : (image->uri && std::strncmp(image->uri, "data:", 5) != 0 ? image->uri : "(embedded)");
                 result.warnings.push_back(std::string("could not load texture '") + name + "'");
             } else {
                 if (tex->sampler)
@@ -114,8 +115,8 @@ struct GltfContext {
             if (src.has_pbr_metallic_roughness) {
                 const auto& pbr = src.pbr_metallic_roughness;
                 // glTF colour factors are already linear.
-                m.baseColor = {pbr.base_color_factor[0], pbr.base_color_factor[1],
-                               pbr.base_color_factor[2], pbr.base_color_factor[3]};
+                m.baseColor = {pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2],
+                               pbr.base_color_factor[3]};
                 m.metallic = pbr.metallic_factor;
                 m.roughness = pbr.roughness_factor;
                 m.baseColorTexture = texture(pbr.base_color_texture, true);
@@ -128,8 +129,7 @@ struct GltfContext {
                 // The older specular-glossiness extension: use what maps
                 // directly onto our model.
                 const auto& sg = src.pbr_specular_glossiness;
-                m.baseColor = {sg.diffuse_factor[0], sg.diffuse_factor[1], sg.diffuse_factor[2],
-                               sg.diffuse_factor[3]};
+                m.baseColor = {sg.diffuse_factor[0], sg.diffuse_factor[1], sg.diffuse_factor[2], sg.diffuse_factor[3]};
                 m.roughness = 1.0f - sg.glossiness_factor;
                 m.baseColorTexture = texture(sg.diffuse_texture, true);
             }
@@ -160,8 +160,7 @@ struct GltfContext {
 
     const cgltf_accessor* findAttribute(const cgltf_primitive& prim, cgltf_attribute_type type, int index = 0) {
         for (cgltf_size i = 0; i < prim.attributes_count; ++i)
-            if (prim.attributes[i].type == type && prim.attributes[i].index == index)
-                return prim.attributes[i].data;
+            if (prim.attributes[i].type == type && prim.attributes[i].index == index) return prim.attributes[i].data;
         return nullptr;
     }
 
@@ -205,8 +204,8 @@ struct GltfContext {
         if (hasNormals) {
             const Mat4 normalMat = normalMatrix(world);
             for (std::size_t i = 0; i < count; ++i)
-                mesh.vertices[i].normal = normalize(
-                    transformDirection(normalMat, {scratch[i * 3], scratch[i * 3 + 1], scratch[i * 3 + 2]}));
+                mesh.vertices[i].normal =
+                    normalize(transformDirection(normalMat, {scratch[i * 3], scratch[i * 3 + 1], scratch[i * 3 + 2]}));
         }
 
         if (uvs && unpack(uvs, 2)) {
@@ -274,8 +273,7 @@ struct GltfContext {
             Mat4 world;
             for (int c = 0; c < 4; ++c)
                 world.c[c] = {matrix[c * 4], matrix[c * 4 + 1], matrix[c * 4 + 2], matrix[c * 4 + 3]};
-            for (cgltf_size i = 0; i < node.mesh->primitives_count; ++i)
-                loadPrimitive(node.mesh->primitives[i], world);
+            for (cgltf_size i = 0; i < node.mesh->primitives_count; ++i) loadPrimitive(node.mesh->primitives[i], world);
         }
         for (cgltf_size i = 0; i < node.children_count; ++i) loadNode(*node.children[i]);
     }

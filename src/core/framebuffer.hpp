@@ -41,13 +41,9 @@ public:
 
     // Row 0 is the top of the image.
     Color8* colorRow(int y) { return color_.data() + static_cast<std::size_t>(y) * width_; }
-    const Color8* colorRow(int y) const {
-        return color_.data() + static_cast<std::size_t>(y) * width_;
-    }
+    const Color8* colorRow(int y) const { return color_.data() + static_cast<std::size_t>(y) * width_; }
     float* depthRow(int y) { return depth_.data() + static_cast<std::size_t>(y) * width_; }
-    const float* depthRow(int y) const {
-        return depth_.data() + static_cast<std::size_t>(y) * width_;
-    }
+    const float* depthRow(int y) const { return depth_.data() + static_cast<std::size_t>(y) * width_; }
 
     Color8& at(int x, int y) { return colorRow(y)[x]; }
     const Color8& at(int x, int y) const { return colorRow(y)[x]; }

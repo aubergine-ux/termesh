@@ -57,18 +57,18 @@ TEST_CASE("options: turntable recording") {
 }
 
 TEST_CASE("options: errors are reported, not ignored") {
-    CHECK_FALSE(parse({}).ok);                                   // no model
-    CHECK_FALSE(parse({"a.obj", "b.obj"}).ok);                   // two models
-    CHECK_FALSE(parse({"a.obj", "--demo", "knot"}).ok);          // model and demo
-    CHECK_FALSE(parse({"a.obj", "--shading", "cel"}).ok);        // bad enum value
-    CHECK_FALSE(parse({"a.obj", "--frames"}).ok);                // missing value
-    CHECK_FALSE(parse({"a.obj", "--frames", "many"}).ok);        // not a number
-    CHECK_FALSE(parse({"a.obj", "--ssaa", "9"}).ok);             // out of range
-    CHECK_FALSE(parse({"a.obj", "--size", "640"}).ok);           // malformed size
-    CHECK_FALSE(parse({"a.obj", "--frobnicate"}).ok);            // unknown option
-    CHECK_FALSE(parse({"a.obj", "--zoom", "nan"}).ok);           // not a finite number
+    CHECK_FALSE(parse({}).ok);                             // no model
+    CHECK_FALSE(parse({"a.obj", "b.obj"}).ok);             // two models
+    CHECK_FALSE(parse({"a.obj", "--demo", "knot"}).ok);    // model and demo
+    CHECK_FALSE(parse({"a.obj", "--shading", "cel"}).ok);  // bad enum value
+    CHECK_FALSE(parse({"a.obj", "--frames"}).ok);          // missing value
+    CHECK_FALSE(parse({"a.obj", "--frames", "many"}).ok);  // not a number
+    CHECK_FALSE(parse({"a.obj", "--ssaa", "9"}).ok);       // out of range
+    CHECK_FALSE(parse({"a.obj", "--size", "640"}).ok);     // malformed size
+    CHECK_FALSE(parse({"a.obj", "--frobnicate"}).ok);      // unknown option
+    CHECK_FALSE(parse({"a.obj", "--zoom", "nan"}).ok);     // not a finite number
     CHECK_FALSE(parse({"a.obj", "--yaw", "inf"}).ok);
-    CHECK_FALSE(parse({"a.obj", "--png", ""}).ok);               // empty file name
+    CHECK_FALSE(parse({"a.obj", "--png", ""}).ok);  // empty file name
     CHECK(parse({"a.obj", "--frobnicate"}).error.find("--frobnicate") != std::string::npos);
     // --help and --version need no model.
     CHECK(parse({"--help"}).ok);
@@ -126,8 +126,8 @@ TEST_CASE("capabilities: cell size sources") {
 }
 
 TEST_CASE("backend names round-trip") {
-    for (BackendKind kind : {BackendKind::Kitty, BackendKind::Sixel, BackendKind::HalfBlock, BackendKind::Braille,
-                             BackendKind::Ascii})
+    for (BackendKind kind :
+         {BackendKind::Kitty, BackendKind::Sixel, BackendKind::HalfBlock, BackendKind::Braille, BackendKind::Ascii})
         CHECK(backendFromName(backendName(kind)) == kind);
     CHECK_FALSE(backendFromName("opengl").has_value());
 }
@@ -159,7 +159,6 @@ TEST_CASE("offscreen: image size, opacity and block upscaling") {
     // Every 8x8 block is a single flat colour.
     bool flat = true;
     for (int y = 0; y < blocky.height; ++y)
-        for (int x = 0; x < blocky.width; ++x)
-            flat = flat && blocky.row(y)[x] == blocky.row(y / 8 * 8)[x / 8 * 8];
+        for (int x = 0; x < blocky.width; ++x) flat = flat && blocky.row(y)[x] == blocky.row(y / 8 * 8)[x / 8 * 8];
     CHECK(flat);
 }

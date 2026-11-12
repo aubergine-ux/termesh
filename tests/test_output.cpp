@@ -86,7 +86,7 @@ TEST_CASE("cells: only changed cells are rewritten, with a cursor jump to each r
     CHECK(writeCellDiff(next, shown, false, out) == 4);
     CHECK(out.find("\x1b[2;3H") != std::string::npos);  // row 2, column 3 (1-based)
     CHECK(out.find("ab") != std::string::npos);
-    CHECK(out.find("\x1b[3C") != std::string::npos);    // from column 4 forward to 7
+    CHECK(out.find("\x1b[3C") != std::string::npos);  // from column 4 forward to 7
     CHECK(out.find("\x1b[3;1H") != std::string::npos);
     // The colour shared by a, b and c is selected once.
     CHECK(count(out, "38;2;0;255;0") == 1);
@@ -137,7 +137,7 @@ TEST_CASE("halfblock: present() sends only what changed") {
     image.row(7)[3] = {200, 100, 50, 255};
     backend->present(image.view(), third);
 
-    CHECK(second.size() < 20);            // just the resets
+    CHECK(second.size() < 20);  // just the resets
     CHECK(third.size() < first.size() / 4);
     CHECK(count(third, kHalfBlock) == 1);
 
@@ -165,10 +165,10 @@ TEST_CASE("braille: dot bits follow the Unicode layout") {
         return out.substr(0, out.find("\x1b[0m"));
     };
     CHECK(glyphFor({}) == " ");
-    CHECK(glyphFor({{0, 0}}) == "\xe2\xa0\x81");                              // U+2801
-    CHECK(glyphFor({{1, 0}}) == "\xe2\xa0\x88");                              // U+2808
-    CHECK(glyphFor({{0, 3}}) == "\xe2\xa1\x80");                              // U+2840
-    CHECK(glyphFor({{1, 3}}) == "\xe2\xa2\x80");                              // U+2880
+    CHECK(glyphFor({{0, 0}}) == "\xe2\xa0\x81");                                                          // U+2801
+    CHECK(glyphFor({{1, 0}}) == "\xe2\xa0\x88");                                                          // U+2808
+    CHECK(glyphFor({{0, 3}}) == "\xe2\xa1\x80");                                                          // U+2840
+    CHECK(glyphFor({{1, 3}}) == "\xe2\xa2\x80");                                                          // U+2880
     CHECK(glyphFor({{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, {1, 2}, {0, 3}, {1, 3}}) == "\xe2\xa3\xbf");  // U+28FF
 }
 
@@ -243,7 +243,8 @@ TEST_CASE("kitty: chunked base64 round-trips the pixels") {
     };
     std::vector<std::uint8_t> bytes;
     for (std::size_t i = 0; i + 3 < payload.size(); i += 4) {
-        const int a = value(payload[i]), b = value(payload[i + 1]), c = value(payload[i + 2]), d = value(payload[i + 3]);
+        const int a = value(payload[i]), b = value(payload[i + 1]), c = value(payload[i + 2]),
+                  d = value(payload[i + 3]);
         bytes.push_back(static_cast<std::uint8_t>((a << 2) | (b >> 4)));
         if (c >= 0) bytes.push_back(static_cast<std::uint8_t>((b << 4) | (c >> 2)));
         if (d >= 0) bytes.push_back(static_cast<std::uint8_t>((c << 6) | d));
@@ -308,14 +309,15 @@ TEST_CASE("gif: frames survive an encode / decode round trip") {
     REQUIRE(file != nullptr);
     std::vector<unsigned char> bytes;
     unsigned char buffer[4096];
-    for (std::size_t n; (n = std::fread(buffer, 1, sizeof(buffer), file)) > 0;) bytes.insert(bytes.end(), buffer, buffer + n);
+    for (std::size_t n; (n = std::fread(buffer, 1, sizeof(buffer), file)) > 0;)
+        bytes.insert(bytes.end(), buffer, buffer + n);
     std::fclose(file);
     std::remove(path.c_str());
 
     int dw = 0, dh = 0, dframes = 0, comp = 0;
     int* delays = nullptr;
-    unsigned char* decoded = stbi_load_gif_from_memory(bytes.data(), static_cast<int>(bytes.size()), &delays, &dw,
-                                                       &dh, &dframes, &comp, 4);
+    unsigned char* decoded =
+        stbi_load_gif_from_memory(bytes.data(), static_cast<int>(bytes.size()), &delays, &dw, &dh, &dframes, &comp, 4);
     REQUIRE(decoded != nullptr);
     CHECK(dw == w);
     CHECK(dh == h);
