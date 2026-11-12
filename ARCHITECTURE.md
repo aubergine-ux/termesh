@@ -29,6 +29,9 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [19. Level of detail](#19-level-of-detail)
 - [20. Holding a frame rate](#20-holding-a-frame-rate)
 - [21. Benchmarks and performance regressions](#21-benchmarks-and-performance-regressions)
+- [22. Scenes and scene files](#22-scenes-and-scene-files)
+- [23. Camera paths](#23-camera-paths)
+- [24. The inspector](#24-the-inspector)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -64,17 +67,18 @@ C++ operating on arrays of floats and bytes.
 | Directory        | What lives there                                                                 |
 | ---------------- | -------------------------------------------------------------------------------- |
 | `src/math/`      | `Vec2/3/4`, `Mat4`, `Quat`. Header-only, no dependencies.                        |
-| `src/core/`      | Framebuffer, images, textures (mipmaps, filtering), colour space, thread pool.   |
+| `src/core/`      | Framebuffer, images, textures (mipmaps, filtering), colour space, thread pool, JSON. |
 | `src/scene/`     | `Model` / `Mesh` / `Material`, rig data, the orbit camera, OBJ and glTF loaders, demos. |
 | `src/anim/`      | Keyframe sampling, pose blending, skinning and morph targets, the timeline.      |
 | `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, shading models, shadows, resolve. |
 | `src/post/`      | Post-processing: sky, SSAO, outlines, bloom, tone mapping, FXAA.                 |
 | `src/accel/`     | BVH, frustum culling, ray picking, mesh simplification for level of detail.      |
+| `src/stage/`     | Scenes of several models, scene files, camera paths.                             |
 | `src/raster/`    | The triangle and line rasterizer and the SIMD wrappers it uses.                  |
 | `src/output/`    | Terminal backends and the cell-diffing writer.                                   |
 | `src/input/`     | Raw terminal access (POSIX / Windows) and the input parser.                      |
 | `src/export/`    | Off-screen rendering, PNG and GIF writing.                                       |
-| `src/app/`       | Command line, capability detection, the interactive viewer, `main`.              |
+| `src/app/`       | Command line, capability detection, the interactive viewer, inspector, benchmarks, `main`. |
 | `tests/`         | doctest unit tests.                                                              |
 | `third_party/`   | cgltf, stb_image, stb_image_write, doctest - single headers, vendored.           |
 
@@ -1055,6 +1059,100 @@ same compiler, means there is no stored baseline to go stale. A scene that
 executes more than 5% more instructions fails the build; a commit that is
 slower on purpose says so with `[perf-ok]` in its message.
 
+## 22. Scenes and scene files
+
+`src/stage/scene.hpp` · `scene_file.cpp` · `src/core/json.cpp` · [docs/scenes.md](docs/scenes.md)
+
+A `Scene` is a list of objects - each a `Model` with a transform, its
+acceleration data and (if animated) its `AnimationPlayer` - plus lights, an
+environment and a camera. Every frame it hands the renderer a draw list: one
+`DrawItem` per visible object. Viewing a single file is just a scene with one
+object in it, so there is one code path for everything.
+
+Objects are held by pointer because other things point into them (a player
+keeps the address of its model's rig); adding an object must never move the
+ones already there.
+
+### The JSON reader
+
+Scene files are JSON, read by a small recursive-descent parser: one function
+per kind of value, each looking at the next character to decide what it is
+reading and calling the others for whatever is nested inside. The grammar is
+small enough that the code *is* the grammar. Errors carry a line and column;
+nesting is capped so that a malicious file cannot overflow the stack; and two
+liberties are taken for files written by hand - `//` comments and trailing
+commas.
+
+A parsed value answers lookups for missing members with a null value instead
+of an error, so reading an optional setting is one chained expression:
+`json["camera"]["path"]["keys"]`.
+
+### Reading a scene
+
+The loader is a long list of "this field, if present, must look like that".
+The first thing that does not is reported with the path to it -
+`models[1].position: expected three numbers` - and reading stops. Harmless
+oddities (an `animation` on a model that has none, a section whose name is
+not recognised) become warnings.
+
+A scene file's `render` block is not applied by the loader at all. The
+application slips it in *underneath* the command line: the options are parsed
+once to find the scene file, the file's settings become the new defaults, and
+the command line is parsed again on top. Whatever the user typed wins, and no
+option needs to remember whether it was set explicitly.
+
+### Placing models
+
+A transform in a scene file is position, rotation in degrees about x, y and
+z, and scale, combined as `translate · yaw · pitch · roll · scale`. Models
+named together on the command line have no such placement, so `arrangeInRow`
+scales each to the same bounding radius, stands it on the ground and lines
+them up.
+
+## 23. Camera paths
+
+`src/stage/camera_path.hpp` · `camera_path.cpp`
+
+A camera path is keyframe animation applied to the viewer rather than the
+viewed: a list of (time, position, target, field of view) and a way to fill
+in between. "Smooth" interpolation is a **Catmull-Rom spline**: the curve from
+one key to the next is shaped by the keys before and after, so that it passes
+exactly through every key and leaves each one heading parallel to the line
+between its neighbours. That is what makes a camera glide through its
+keyframes instead of stopping at each.
+
+```
+          p1 ●━━━━━━━━━● p2            the segment drawn is p1 → p2;
+           ╱             ╲             p0 and p3 only bend it
+      p0 ●                 ● p3
+```
+
+A looping path wraps its neighbours around, so the join is as smooth as
+anywhere else; an open path repeats its end keys, so the camera eases in and
+out. A turntable is simply a looping path of sixteen keys on a circle.
+
+In the viewer the path plays until the user steers. `leavePath` then builds
+an orbit camera that shows *exactly* the same view (`orbitFromPose` recovers
+yaw, pitch and distance from the position and target), so control changes
+hands without a jump.
+
+## 24. The inspector
+
+`src/app/inspector.hpp` · `inspector.cpp` · `Viewer::drawInspector`
+
+The inspector is split in two so that most of it needs no terminal.
+`Inspector` turns a scene into rows - object, group, mesh, material, node,
+light - keeps track of which headings are open and which row is selected, and
+renders a frame as lines of plain text of an exact width (counting
+characters, not bytes: names are UTF-8). The viewer only places those lines,
+colours them, and - like the cell backends - sends just the ones that changed.
+
+Rows are identified by a key string (`o1/mesh3`) rather than by index, so the
+selection and the set of open headings survive the outline being rebuilt.
+Selecting a row tells the renderer which mesh (or whole model) to tint, and a
+click in the picture runs the [picking](#18-the-bvh-culling-and-picking) ray
+and opens the outline at whatever it hit.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle
@@ -1113,6 +1211,13 @@ slower on purpose says so with `[perf-ok]` in its message.
 - `test_lod.cpp` - every level a valid smaller mesh, borders and texture seams
   preserved, level selection by distance and resolution, levels following an
   animation, and the frame-rate governor's ladder.
+- `test_stage.cpp` - the JSON reader (every type, escapes, errors with
+  positions, deep nesting), camera paths (through the keys, smooth across a
+  loop's join, turntables), scenes, and scene files: a complete one, each
+  kind of mistake, and the examples that ship in `examples/`.
+- `test_inspector.cpp` - the outline's rows, folding, selection in both
+  directions, details of every kind of row, and frames of exactly the
+  requested size.
 - `test_output.cpp` - cell diffing, each backend's encoding (the kitty and GIF
   streams are decoded again and compared), palette quantisation, and
   dithering: averages preserved, backgrounds untouched, each backend's

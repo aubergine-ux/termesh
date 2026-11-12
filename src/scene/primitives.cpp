@@ -179,6 +179,44 @@ Model makeKnot() {
     return model;
 }
 
+// A square of ground, two units on a side, for other models to stand on and
+// cast shadows across. It is a grid rather than a single quad so that
+// per-vertex shading has something to interpolate between.
+Model makePlane() {
+    constexpr int kCells = 16;
+    Model model;
+    model.name = "plane";
+    Mesh mesh;
+    mesh.hasUVs = true;
+    for (int z = 0; z <= kCells; ++z)
+        for (int x = 0; x <= kCells; ++x) {
+            const float u = static_cast<float>(x) / kCells, v = static_cast<float>(z) / kCells;
+            Vertex vert;
+            vert.position = {u * 2.0f - 1.0f, 0.0f, v * 2.0f - 1.0f};
+            vert.normal = {0.0f, 1.0f, 0.0f};
+            vert.uv = {u * 4.0f, v * 4.0f};
+            mesh.vertices.push_back(vert);
+        }
+    for (int z = 0; z < kCells; ++z)
+        for (int x = 0; x < kCells; ++x) {
+            const auto a = static_cast<std::uint32_t>(z * (kCells + 1) + x), b = a + 1;
+            const auto c = a + static_cast<std::uint32_t>(kCells + 1), d = c + 1;
+            // Counter-clockwise seen from above.
+            for (std::uint32_t idx : {a, c, b, b, c, d}) mesh.indices.push_back(idx);
+        }
+    computeTangents(mesh);
+    model.meshes.push_back(std::move(mesh));
+
+    model.textures.push_back(makeGridTexture(256, 2, {0.42f, 0.44f, 0.48f}, {0.55f, 0.57f, 0.6f}));
+    Material m;
+    m.name = "ground";
+    m.baseColorTexture = 0;
+    m.roughness = 0.85f;
+    m.doubleSided = true;
+    model.materials.push_back(m);
+    return model;
+}
+
 // An animated demo: a tapering tube with a chain of bones up its middle and
 // two clips, so skinning, playback and cross-fading can be tried without any
 // files. It is built the way a loader would build it - rest shape, bone
@@ -299,7 +337,7 @@ Model makeTentacle() {
 
 }  // namespace
 
-std::vector<std::string> demoModelNames() { return {"knot", "cube", "sphere", "tentacle"}; }
+std::vector<std::string> demoModelNames() { return {"knot", "cube", "sphere", "tentacle", "plane"}; }
 
 Model makeDemoModel(const std::string& name) {
     Model model;
@@ -307,6 +345,7 @@ Model makeDemoModel(const std::string& name) {
     else if (name == "sphere") model = makeSphere();
     else if (name == "knot") model = makeKnot();
     else if (name == "tentacle") model = makeTentacle();
+    else if (name == "plane") model = makePlane();
     finalizeModel(model);
     return model;
 }

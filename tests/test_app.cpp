@@ -61,7 +61,7 @@ TEST_CASE("options: turntable recording") {
 
 TEST_CASE("options: errors are reported, not ignored") {
     CHECK_FALSE(parse({}).ok);                             // no model
-    CHECK_FALSE(parse({"a.obj", "b.obj"}).ok);             // two models
+    CHECK(parse({"a.obj", "b.obj"}).ok);                   // several models are shown side by side
     CHECK_FALSE(parse({"a.obj", "--demo", "knot"}).ok);    // model and demo
     CHECK_FALSE(parse({"a.obj", "--shading", "cel"}).ok);  // bad enum value
     CHECK_FALSE(parse({"a.obj", "--frames"}).ok);          // missing value

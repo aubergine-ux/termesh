@@ -1,17 +1,15 @@
-// termesh - a 3D model viewer for the terminal.
+// termesh - a 3D model viewer, and scene renderer, for the terminal.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <optional>
 #include <string>
 #include <vector>
 
+#include "anim/skinning.hpp"
 #include "app/benchmark.hpp"
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
-#include "anim/player.hpp"
-#include "anim/skinning.hpp"
 #include "app/viewer.hpp"
 #include "export/gif.hpp"
 #include "export/offscreen.hpp"
@@ -19,31 +17,68 @@
 #include "raster/simd.hpp"
 #include "scene/loader.hpp"
 #include "scene/primitives.hpp"
+#include "stage/scene_file.hpp"
 
 using namespace termesh;
 
 namespace {
 
-// The render settings the options describe, lit by `environment`.
-RenderSettings renderSettings(const Options& options, const Environment& environment) {
+// The render settings the options describe, for a scene.
+RenderSettings renderSettings(const Options& options, const Scene& scene) {
     RenderSettings settings = makeRenderSettings(options);
     settings.lightDirection =
         transformDirection(rotate({0.0f, 1.0f, 0.0f}, radians(options.lightAngle)), settings.lightDirection);
-    settings.environment = &environment;
-    settings.skybox = wantsSkybox(options, environment);
+    settings.lights = scene.lights;
+    settings.environment = &scene.environment;
+    settings.skybox = options.skybox.value_or(scene.skybox.value_or(scene.environment.hasMap()));
+    if (options.skyBlur == 0.0f) settings.skyboxBlur = scene.skyBlur;
     return settings;
 }
 
+// Where the non-interactive modes look from: along the scene's camera path
+// if it has one, from its fixed camera if it has one of those, and
+// otherwise from the usual framing of everything, turned by the options.
+struct View {
+    View(const Options& options, const Scene& scene) : scene_(scene), bounds_(scene.bounds()) {
+        usesPath_ = options.followPath && !scene.cameraPath.empty();
+        const bool aimed = options.yaw || options.pitch;
+        if (scene.camera && !aimed) {
+            orbit_ = orbitFromPose(*scene.camera, bounds_);
+            orbit_.zoom(1.0f / options.zoom);
+        } else {
+            orbit_ = makeCamera(options, bounds_);
+        }
+    }
+
+    bool usesPath() const { return usesPath_; }
+    float pathDuration() const { return scene_.cameraPath.duration; }
+
+    // The camera `pathTime` seconds along the path, or - without a path -
+    // turned by `turn` radians from where it started.
+    Camera camera(float aspect, float pathTime, float turn) const {
+        if (usesPath_) return cameraFromPose(scene_.cameraPath.evaluate(pathTime), aspect, bounds_);
+        OrbitCamera orbit = orbit_;
+        orbit.yaw += turn;
+        return orbit.camera(aspect);
+    }
+
+private:
+    const Scene& scene_;
+    Bounds bounds_;
+    OrbitCamera orbit_;
+    bool usesPath_ = false;
+};
+
 // Level of detail for the non-interactive modes: off unless asked for.
 // Returns the tolerance in output pixels, having built the levels if needed.
-float prepareLods(const Options& options, const Model& model, ModelAccel& accel, ThreadPool& pool) {
+float prepareLods(const Options& options, Scene& scene, ThreadPool& pool) {
     const float tolerance = options.lodTolerance.value_or(0.0f);
-    if (tolerance > 0.0f) accel.buildLods(model, &pool);
+    if (tolerance > 0.0f) scene.buildLods(&pool);
     return tolerance;
 }
 
 // --png: one frame to an image file.
-int runPng(const Options& options, const Model& model, const Environment& environment, ThreadPool& pool) {
+int runPng(const Options& options, Scene& scene, ThreadPool& pool) {
     Renderer renderer(pool);
     OffscreenTarget target;
     if (options.width > 0) {
@@ -53,12 +88,13 @@ int runPng(const Options& options, const Model& model, const Environment& enviro
     target.supersampling = options.supersampling > 0 ? options.supersampling : 2;
     target.blocks = options.blocks;
 
-    RenderSettings settings = renderSettings(options, environment);
-    ModelAccel accel(model, &pool);
-    settings.lodTolerance = prepareLods(options, model, accel, pool);
-    const DrawItem item{&model, Mat4::identity(), &accel};
-    const Image image = renderOffscreen(renderer, pool, std::span<const DrawItem>(&item, 1), makeCamera(options, model),
-                                        settings, target);
+    RenderSettings settings = renderSettings(options, scene);
+    settings.lodTolerance = prepareLods(options, scene, pool);
+    const View view(options, scene);
+    const std::vector<DrawItem> items = scene.drawItems();
+    const Image image = renderOffscreen(
+        renderer, pool, items, [&](float aspect) { return view.camera(aspect, options.cameraTime, 0.0f); }, settings,
+        target);
     if (!writePng(options.pngPath, image)) {
         std::fprintf(stderr, "termesh: could not write '%s'\n", options.pngPath.c_str());
         return 1;
@@ -67,11 +103,13 @@ int runPng(const Options& options, const Model& model, const Environment& enviro
     return 0;
 }
 
-// --gif: a looping animation. For a static model that is a full turn of the
-// camera; for an animated one it is one loop of the clip, seen from a fixed
-// camera unless --spin asks for the turn as well.
-int runGif(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
-           ThreadPool& pool) {
+// --gif: a looping animation. What moves depends on the scene:
+//
+//   a camera path     the camera follows it, once round
+//   animated models   one loop of the animation, from a fixed camera
+//                     (add --spin to turn the camera as well)
+//   neither           a full turn of the camera around the scene
+int runGif(const Options& options, Scene& scene, ThreadPool& pool) {
     Renderer renderer(pool);
     OffscreenTarget target;
     target.width = options.width > 0 ? options.width : 480;
@@ -79,43 +117,52 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, const 
     target.supersampling = options.supersampling > 0 ? options.supersampling : 3;
     target.blocks = options.blocks;
 
-    RenderSettings settings = renderSettings(options, environment);
-    ModelAccel accel(model, &pool);
-    settings.lodTolerance = prepareLods(options, model, accel, pool);
-    const DrawItem item{&model, Mat4::identity(), &accel};
-    OrbitCamera camera = makeCamera(options, model);
-    const float startYaw = camera.yaw;
+    RenderSettings settings = renderSettings(options, scene);
+    settings.lodTolerance = prepareLods(options, scene, pool);
+    const View view(options, scene);
     // Spin the same way as the interactive viewer; a negative speed reverses.
     const float direction = options.spinSpeed < 0.0f ? -1.0f : 1.0f;
-    const bool spin = !player || options.spinExplicit;
+    const bool spin = !view.usesPath() && (!scene.animated() || options.spinExplicit);
 
-    // By default an animated GIF lasts exactly one loop of the clip, so that
-    // it repeats seamlessly.
-    const float rate = player ? std::abs(player->speed()) : 0.0f;
-    const float startTime = player ? player->time() : 0.0f;
+    // Where each animation starts, so that every frame can be placed
+    // exactly rather than accumulated.
+    std::vector<float> startTimes;
+    float loopSeconds = 0.0f;  // the longest animation loop, at its playback speed
+    for (const auto& object : scene.objects) {
+        startTimes.push_back(object->player ? object->player->time() : 0.0f);
+        if (object->player && object->player->speed() != 0.0f)
+            loopSeconds = std::max(loopSeconds, object->player->duration() / std::abs(object->player->speed()));
+    }
+
+    // By default the GIF lasts exactly as long as whatever is moving, so
+    // that it repeats seamlessly.
     int frameCount = options.frames;
     if (frameCount <= 0) {
-        frameCount = 72;
-        if (player && player->duration() > 0.0f && rate > 0.0f)
-            frameCount = std::clamp(
-                static_cast<int>(std::lround(player->duration() / rate * static_cast<float>(options.gifFps))), 2, 2000);
+        const float seconds = view.usesPath() ? view.pathDuration() : loopSeconds;
+        frameCount =
+            seconds > 0.0f
+                ? std::clamp(static_cast<int>(std::lround(seconds * static_cast<float>(options.gifFps))), 2, 2000)
+                : 72;
     }
 
     const bool progress = Terminal::errorIsTerminal();
     std::vector<Image> frames;
     frames.reserve(static_cast<std::size_t>(frameCount));
     for (int i = 0; i < frameCount; ++i) {
+        const float seconds = static_cast<float>(i) / static_cast<float>(options.gifFps);
         // The last frame stops one step short of a full turn, so the loop
         // joins up without a repeated frame.
-        if (spin)
-            camera.yaw = startYaw + direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(frameCount);
-        if (player) {
-            player->seek(startTime + player->speed() * static_cast<float>(i) / static_cast<float>(options.gifFps));
-            applyPose(model, player->pose(), &pool);
-            accel.refresh(model);
-        }
-        frames.push_back(
-            renderOffscreen(renderer, pool, std::span<const DrawItem>(&item, 1), camera, settings, target));
+        const float turn =
+            spin ? direction * 2.0f * kPi * static_cast<float>(i) / static_cast<float>(frameCount) : 0.0f;
+        for (std::size_t k = 0; k < scene.objects.size(); ++k)
+            if (AnimationPlayer* player = scene.objects[k]->player.get())
+                player->seek(startTimes[k] + player->speed() * seconds);
+        scene.pose(&pool);
+
+        const std::vector<DrawItem> items = scene.drawItems();
+        frames.push_back(renderOffscreen(
+            renderer, pool, items,
+            [&](float aspect) { return view.camera(aspect, options.cameraTime + seconds, turn); }, settings, target));
         if (progress) std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, frameCount);
     }
 
@@ -137,7 +184,7 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, const 
 }
 
 // --print: a single frame written into the terminal's normal scrollback.
-int runPrint(const Options& options, const Model& model, const Environment& environment, ThreadPool& pool) {
+int runPrint(const Options& options, Scene& scene, ThreadPool& pool) {
     TerminalCaps caps = capsFromEnvironment();
     Terminal terminal;
     const TerminalSize size = terminal.size();
@@ -170,18 +217,17 @@ int runPrint(const Options& options, const Model& model, const Environment& envi
     int ssaa = options.supersampling > 0 ? options.supersampling : backend->defaultSupersampling();
     while (ssaa > 1 && static_cast<std::int64_t>(width) * ssaa * height * ssaa > kMaxFramebufferPixels) --ssaa;
 
-    RenderSettings settings = renderSettings(options, environment);
+    RenderSettings settings = renderSettings(options, scene);
     settings.wireframe = settings.wireframe || backend->wantsWireframe();
     settings.wireWidth = static_cast<float>(ssaa);
     settings.pixelScale = static_cast<float>(ssaa);
+    settings.lodTolerance = prepareLods(options, scene, pool) * static_cast<float>(ssaa);
 
     Renderer renderer(pool);
     Framebuffer fb(width * ssaa, height * ssaa);
     const float aspect = static_cast<float>(width) * backend->pixelAspect() / static_cast<float>(height);
-    ModelAccel accel(model, &pool);
-    settings.lodTolerance = prepareLods(options, model, accel, pool) * static_cast<float>(ssaa);
-    const DrawItem item{&model, Mat4::identity(), &accel};
-    renderer.render(std::span<const DrawItem>(&item, 1), makeCamera(options, model).camera(aspect), settings, fb);
+    const std::vector<DrawItem> items = scene.drawItems();
+    renderer.render(items, View(options, scene).camera(aspect, options.cameraTime, 0.0f), settings, fb);
     Image image;
     resolve(fb, ssaa, image, pool);
     if (settings.post.fxaa) applyFxaa(image, pool);
@@ -195,45 +241,43 @@ int runPrint(const Options& options, const Model& model, const Environment& envi
 }
 
 // --bench: time the renderer alone, with no terminal in the way.
-int runBench(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
-             ThreadPool& pool) {
+int runBench(const Options& options, Scene& scene, ThreadPool& pool) {
     Renderer renderer(pool);
     const int width = options.width > 0 ? options.width : 640;
     const int height = options.height > 0 ? options.height : 360;
     const int ssaa = options.supersampling > 0 ? options.supersampling : 1;
     Framebuffer fb(width * ssaa, height * ssaa);
     Image image;
-    RenderSettings settings = renderSettings(options, environment);
+    RenderSettings settings = renderSettings(options, scene);
     settings.wireWidth = static_cast<float>(ssaa);
     settings.pixelScale = static_cast<float>(ssaa);
-    OrbitCamera camera = makeCamera(options, model);
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    const View view(options, scene);
 
-    // The same boxes and BVHs the viewer uses, so the numbers match it.
-    ModelAccel accel(model, &pool);
     if (options.lodTolerance.value_or(0.0f) > 0.0f) {
         const auto lodStart = std::chrono::steady_clock::now();
-        accel.buildLods(model, &pool);
+        scene.buildLods(&pool);
         std::printf("lod          built in %.1f ms\n",
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lodStart).count());
         settings.lodTolerance = *options.lodTolerance * static_cast<float>(ssaa);
     }
-    const DrawItem item{&model, Mat4::identity(), &accel};
 
     RenderStats total;
     double poseMs = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < options.benchFrames; ++i) {
-        camera.yaw += radians(2.0f);
-        if (player) {
-            // A fixed time step, so every run poses the same frames.
+        // Fixed steps, so every run renders the same frames: two degrees of
+        // turn (or a sixtieth of a second of camera path) per frame.
+        const float seconds = static_cast<float>(i) / 60.0f;
+        if (scene.animated()) {
             const auto poseStart = std::chrono::steady_clock::now();
-            player->advance(1.0f / 60.0f);
-            applyPose(model, player->pose(), &pool);
-            accel.refresh(model);
+            scene.update(1.0f / 60.0f, &pool);
             poseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - poseStart).count();
         }
-        const RenderStats s = renderer.render(std::span<const DrawItem>(&item, 1), camera.camera(aspect), settings, fb);
+        const std::vector<DrawItem> items = scene.drawItems();
+        const RenderStats s = renderer.render(
+            items, view.camera(aspect, options.cameraTime + seconds, radians(2.0f) * static_cast<float>(i + 1)),
+            settings, fb);
         resolve(fb, ssaa, image, pool);
         if (settings.post.fxaa) applyFxaa(image, pool);
         total.vertexMs += s.vertexMs;
@@ -248,8 +292,8 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     const double n = options.benchFrames;
 
-    std::printf("model        %s: %zu triangles, %zu vertices\n", model.name.c_str(), model.triangleCount(),
-                model.vertexCount());
+    std::printf("model        %s: %zu triangles, %zu vertices\n", scene.name.c_str(), scene.triangleCount(),
+                scene.vertexCount());
     std::printf("target       %dx%d, ssaa %d, %s shading%s, %u threads, %s\n", width, height, ssaa,
                 shadingModeName(settings.shading), settings.wireframe ? " (wireframe)" : "", pool.threadCount(),
                 simd::kName);
@@ -267,9 +311,7 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     if (total.shadowMs > 0.0 || total.postMs > 0.0)
         std::printf("effects      shadow maps %.2f ms, post-processing %.2f ms\n", total.shadowMs / n,
                     total.postMs / n);
-    if (player)
-        std::printf("animation    %s: pose + skinning %.2f ms per frame\n", player->clipName(player->clip()).c_str(),
-                    poseMs / n);
+    if (scene.animated()) std::printf("animation    pose + skinning %.2f ms per frame\n", poseMs / n);
     return 0;
 }
 
@@ -304,15 +346,100 @@ int runBenchmark(const Options& options) {
     return 0;
 }
 
+// Put together the scene the command line asks for: a scene file, a
+// built-in demo, or one or more model files. Returns false (having said
+// why) if that cannot be done. `options` may be replaced: a scene file's
+// render settings become the defaults underneath the command line.
+bool buildScene(int argc, char** argv, Options& options, ThreadPool& pool, Scene& scene) {
+    if (!options.demo.empty()) {
+        Model model = makeDemoModel(options.demo);
+        if (model.meshes.empty()) {
+            std::fprintf(stderr, "termesh: unknown demo '%s'\nTry 'termesh --help'.\n", options.demo.c_str());
+            return false;
+        }
+        scene.name = model.name;
+        scene.add(std::move(model), options.demo, Mat4::identity(), &pool).source = "demo:" + options.demo;
+        return true;
+    }
+
+    if (isSceneFile(options.inputs.front())) {
+        SceneLoadResult loaded = loadSceneFile(options.inputs.front(), &pool);
+        for (const std::string& warning : loaded.warnings)
+            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
+        if (!loaded.ok) {
+            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
+            return false;
+        }
+        scene = std::move(loaded.scene);
+
+        // The file's "render" settings sit between the built-in defaults and
+        // the command line: read the command line again on top of them.
+        Options defaults;
+        if (std::string error; !applySceneRenderSettings(scene.renderSettings, defaults, error)) {
+            std::fprintf(stderr, "termesh: '%s': %s\n", options.inputs.front().c_str(), error.c_str());
+            return false;
+        }
+        options = parseOptions(argc, argv, defaults).options;
+        return true;
+    }
+
+    for (const std::string& path : options.inputs) {
+        LoadResult loaded = loadModel(path);
+        for (const std::string& warning : loaded.warnings)
+            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
+        if (!loaded.ok) {
+            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
+            return false;
+        }
+        const std::string name = loaded.model.name;
+        scene.add(std::move(loaded.model), name, Mat4::identity(), &pool).source = path;
+    }
+    scene.name = scene.objects.front()->name;
+    if (scene.objects.size() > 1) {
+        // Models from different files were not made to share a space.
+        scene.name += " +" + std::to_string(scene.objects.size() - 1);
+        scene.arrangeInRow();
+    }
+    return true;
+}
+
+// Apply the animation options to every animated model in the scene.
+bool setUpAnimations(const Options& options, Scene& scene, ThreadPool& pool) {
+    bool matched = false;
+    for (const auto& object : scene.objects) {
+        if (!object->player) continue;
+        AnimationPlayer& player = *object->player;
+        if (!options.animation.empty()) {
+            const int clip = findAnimation(object->model, options.animation);
+            if (clip >= 0) {
+                player.setClip(clip);
+                matched = true;
+            }
+        }
+        if (options.animationSpeedSet) player.setSpeed(options.animationSpeed);
+        if (options.animationTimeSet) player.seek(options.animationTime);
+        if (options.animationPaused) player.pause();
+    }
+    scene.pose(&pool);
+    if (options.animation.empty() || matched) return true;
+    if (scene.animated()) {
+        std::fprintf(stderr, "termesh: no animation '%s' in %s (try --list-animations)\n", options.animation.c_str(),
+                     scene.name.c_str());
+        return false;
+    }
+    std::fprintf(stderr, "termesh: warning: %s has no animations; --animation ignored\n", scene.name.c_str());
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    const ParseResult parsed = parseOptions(argc, argv);
+    ParseResult parsed = parseOptions(argc, argv);
     if (!parsed.ok) {
         std::fprintf(stderr, "termesh: %s\nTry 'termesh --help'.\n", parsed.error.c_str());
         return 2;
     }
-    const Options& options = parsed.options;
+    Options& options = parsed.options;
     if (options.showHelp) {
         std::fputs(usageText().c_str(), stdout);
         return 0;
@@ -321,80 +448,50 @@ int main(int argc, char** argv) {
         std::printf("termesh %s\n", TERMESH_VERSION);
         return 0;
     }
-
     if (options.benchmarkList) {
         for (const std::string& name : benchmarkSceneNames()) std::printf("%s\n", name.c_str());
         return 0;
     }
     if (options.benchmark) return runBenchmark(options);
 
-    Model model;
-    if (!options.demo.empty()) {
-        model = makeDemoModel(options.demo);
-        if (model.meshes.empty()) {
-            std::fprintf(stderr, "termesh: unknown demo '%s'\nTry 'termesh --help'.\n", options.demo.c_str());
-            return 2;
-        }
-    } else {
-        LoadResult loaded = loadModel(options.modelPath);
-        for (const std::string& warning : loaded.warnings)
-            std::fprintf(stderr, "termesh: warning: %s\n", warning.c_str());
-        if (!loaded.ok) {
-            std::fprintf(stderr, "termesh: %s\n", loaded.error.c_str());
-            return 1;
-        }
-        model = std::move(loaded.model);
-    }
+    ThreadPool pool(static_cast<unsigned>(options.threads));
+    Scene scene;
+    if (!buildScene(argc, argv, options, pool, scene)) return options.demo.empty() ? 1 : 2;
 
     if (options.listAnimations) {
-        if (!model.animated()) std::printf("%s has no animations\n", model.name.c_str());
-        for (std::size_t i = 0; i < model.rig.animations.size(); ++i) {
-            const Animation& animation = model.rig.animations[i];
-            std::printf("%2zu  %-24s %6.2f s  %zu channels\n", i + 1,
-                        animation.name.empty() ? "(unnamed)" : animation.name.c_str(), animation.duration,
-                        animation.channels.size());
+        for (const auto& object : scene.objects) {
+            const Model& model = object->model;
+            if (scene.objects.size() > 1) std::printf("%s:\n", object->name.c_str());
+            if (!model.animated()) std::printf("%s has no animations\n", object->name.c_str());
+            for (std::size_t i = 0; i < model.rig.animations.size(); ++i) {
+                const Animation& animation = model.rig.animations[i];
+                std::printf("%2zu  %-24s %6.2f s  %zu channels\n", i + 1,
+                            animation.name.empty() ? "(unnamed)" : animation.name.c_str(), animation.duration,
+                            animation.channels.size());
+            }
         }
         return 0;
     }
 
-    Environment environment;
-    if (std::string error; !loadEnvironmentOption(options, environment, error)) {
-        std::fprintf(stderr, "termesh: %s\n", error.c_str());
-        return 1;
-    }
-
-    ThreadPool pool(static_cast<unsigned>(options.threads));
-
-    // Animated models get a player, positioned where the options ask.
-    std::optional<AnimationPlayer> playerStorage;
-    AnimationPlayer* player = nullptr;
-    if (model.animated()) {
-        const int clip = findAnimation(model, options.animation);
-        if (clip < 0) {
-            std::fprintf(stderr, "termesh: no animation '%s' in %s (try --list-animations)\n",
-                         options.animation.c_str(), model.name.c_str());
-            return 2;
+    // An environment named on the command line replaces the scene's.
+    if (!options.environment.empty() || !scene.hasEnvironment) {
+        if (std::string error; !loadEnvironmentOption(options, scene.environment, error)) {
+            std::fprintf(stderr, "termesh: %s\n", error.c_str());
+            return 1;
         }
-        player = &playerStorage.emplace(model.rig);
-        player->setClip(clip);
-        player->setSpeed(options.animationSpeed);
-        player->seek(options.animationTime);
-        if (options.animationPaused) player->pause();
-        applyPose(model, player->pose(), &pool);
-    } else if (!options.animation.empty()) {
-        std::fprintf(stderr, "termesh: warning: %s has no animations; --animation ignored\n", model.name.c_str());
     }
+    if (!setUpAnimations(options, scene, pool)) return 2;
 
-    if (options.benchFrames > 0) return runBench(options, model, player, environment, pool);
+    if (options.benchFrames > 0) return runBench(options, scene, pool);
     // --png and --gif can be combined: one run writes both.
     if (!options.pngPath.empty() || !options.gifPath.empty()) {
         int status = 0;
-        if (!options.pngPath.empty()) status = runPng(options, model, environment, pool);
-        if (status == 0 && !options.gifPath.empty()) status = runGif(options, model, player, environment, pool);
+        if (!options.pngPath.empty()) status = runPng(options, scene, pool);
+        if (status == 0 && !options.gifPath.empty()) status = runGif(options, scene, pool);
         return status;
     }
-    if (options.print) return runPrint(options, model, environment, pool);
+    if (options.print) return runPrint(options, scene, pool);
 
-    Viewer viewer(options, model, player, environment, pool);
+    Viewer viewer(options, scene, pool);
     return viewer.run();
 }

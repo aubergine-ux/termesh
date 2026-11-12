@@ -1,6 +1,7 @@
 // Off-screen rendering to images, for PNG screenshots and GIF recording.
 #pragma once
 
+#include <functional>
 #include <span>
 #include <string>
 
@@ -28,6 +29,12 @@ Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, 
 // of detail tolerance) are given in output pixels and scaled to the
 // supersampled framebuffer here.
 Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const OrbitCamera& camera,
+                      RenderSettings settings, const OffscreenTarget& target, RenderStats* stats = nullptr);
+
+// ...and for any camera: a function from the image's aspect ratio (width /
+// height) to the camera to use.
+using CameraSource = std::function<Camera(float aspect)>;
+Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const CameraSource& camera,
                       RenderSettings settings, const OffscreenTarget& target, RenderStats* stats = nullptr);
 
 bool writePng(const std::string& path, const Image& image);

@@ -20,8 +20,12 @@ std::string usageText() {
                        " - 3D model viewer for the terminal\n"
                        "\n"
                        "Usage:\n"
-                       "  termesh [options] <model.obj | model.gltf | model.glb>\n"
+                       "  termesh [options] <model.obj | model.gltf | model.glb> [more models...]\n"
+                       "  termesh [options] <scene.json>\n"
                        "  termesh [options] --demo <name>\n"
+                       "\n"
+                       "Several models are shown side by side. A scene file places models, lights and a\n"
+                       "camera exactly; see docs/scenes.md.\n"
                        "\n"
                        "Display:\n"
                        "  -b, --backend <name>   kitty, sixel, halfblock, braille or ascii (default: best available)\n"
@@ -61,6 +65,8 @@ std::string usageText() {
                        "      --exposure <stops> brighten (+) or darken (-) before tone mapping\n"
                        "\n"
                        "Camera:\n"
+                       "      --camera-time <s>  where along a scene's camera path to start, or to take a still\n"
+                       "      --no-path          ignore the scene's camera path\n"
                        "      --yaw <deg>        initial rotation around the vertical axis\n"
                        "      --pitch <deg>      initial elevation\n"
                        "      --zoom <factor>    initial zoom, > 1 is closer (default: 1)\n"
@@ -154,9 +160,13 @@ bool wantsSkybox(const Options& options, const Environment& environment) {
 }
 
 OrbitCamera makeCamera(const Options& options, const Model& model) {
+    return makeCamera(options, model.framingBounds());
+}
+
+OrbitCamera makeCamera(const Options& options, const Bounds& bounds) {
     OrbitCamera camera;
     camera.fovY = radians(options.fov);  // before frame(): the distance depends on it
-    camera.frame(model.framingBounds());
+    camera.frame(bounds);
     if (options.yaw) camera.yaw = radians(*options.yaw);
     if (options.pitch) camera.pitch = radians(std::clamp(*options.pitch, -89.0f, 89.0f));
     camera.zoom(1.0f / options.zoom);
@@ -218,9 +228,114 @@ bool parseColor(std::string_view text, Color8& out) {
 
 }  // namespace
 
-ParseResult parseOptions(int argc, const char* const* argv) {
+bool isSceneFile(const std::string& path) {
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string extension = path.substr(dot + 1);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == "json";
+}
+
+bool applySceneRenderSettings(const Json& render, Options& o, std::string& error) {
+    if (render.isNull()) return true;
+    auto fail = [&](const std::string& key, const std::string& what) {
+        error = "render." + key + ": " + what;
+        return false;
+    };
+    for (const auto& [key, value] : render.members()) {
+        // Switches.
+        bool* flag = nullptr;
+        if (key == "wireframe") flag = &o.wireframe;
+        else if (key == "textures") flag = &o.textures;
+        else if (key == "normalMaps") flag = &o.normalMaps;
+        else if (key == "cull") flag = &o.cullBackfaces;
+        else if (key == "shadows") flag = &o.shadows;
+        else if (key == "ssao") flag = &o.ssao;
+        else if (key == "bloom") flag = &o.bloom;
+        else if (key == "fxaa") flag = &o.fxaa;
+        if (flag) {
+            if (!value.isBool()) return fail(key, "expected true or false");
+            *flag = value.boolean();
+            continue;
+        }
+        if (key == "outline") {
+            if (!value.isBool()) return fail(key, "expected true or false");
+            o.outline = value.boolean();
+            continue;
+        }
+
+        // Numbers, with the same limits as the command line.
+        struct Range {
+            double lo, hi;
+        };
+        auto numberIn = [&](Range range, double& out) {
+            if (!value.isNumber() || value.number() < range.lo || value.number() > range.hi) {
+                fail(key, "expected a number from " + std::to_string(static_cast<int>(range.lo)) + " to " +
+                              std::to_string(static_cast<int>(range.hi)));
+                return false;
+            }
+            out = value.number();
+            return true;
+        };
+        double v = 0.0;
+        if (key == "shadowSize") {
+            if (!numberIn({64, 2048}, v)) return false;
+            o.shadowMapSize = static_cast<int>(v);
+        } else if (key == "shadowSoftness") {
+            if (!numberIn({1, 7}, v)) return false;
+            o.shadowSoftness = static_cast<int>(v);
+        } else if (key == "ssaa") {
+            if (!numberIn({1, 4}, v)) return false;
+            o.supersampling = static_cast<int>(v);
+        } else if (key == "exposure") {
+            if (!numberIn({-16, 16}, v)) return false;
+            o.exposure = static_cast<float>(v);
+        } else if (key == "lightAngle") {
+            if (!numberIn({-100000, 100000}, v)) return false;
+            o.lightAngle = static_cast<float>(v);
+        } else if (key == "lod") {
+            if (!numberIn({0, 64}, v)) return false;
+            o.lodTolerance = static_cast<float>(v);
+        } else if (key == "fov") {
+            if (!numberIn({5, 150}, v)) return false;
+            o.fov = static_cast<float>(v);
+        } else if (key == "shading") {
+            const std::string& mode = value.string();
+            if (mode == "flat") o.shading = ShadingMode::Flat;
+            else if (mode == "gouraud") o.shading = ShadingMode::Gouraud;
+            else if (mode == "phong") o.shading = ShadingMode::Phong;
+            else if (mode == "pbr") o.shading = ShadingMode::Pbr;
+            else if (mode == "toon") o.shading = ShadingMode::Toon;
+            else return fail(key, "expected \"flat\", \"gouraud\", \"phong\", \"pbr\" or \"toon\"");
+        } else if (key == "tonemap") {
+            const std::string& curve = value.string();
+            if (curve == "aces") o.toneMapper = ToneMapper::Aces;
+            else if (curve == "reinhard") o.toneMapper = ToneMapper::Reinhard;
+            else if (curve == "filmic") o.toneMapper = ToneMapper::Filmic;
+            else if (curve == "linear") o.toneMapper = ToneMapper::Linear;
+            else return fail(key, "expected \"aces\", \"reinhard\", \"filmic\" or \"linear\"");
+        } else if (key == "background") {
+            if (!value.isString() || !parseColor(value.string(), o.background))
+                return fail(key, "expected \"#rrggbb\"");
+        } else if (key == "dither") {
+            const auto mode = ditherModeFromName(value.string());
+            if (!mode) return fail(key, "expected \"auto\", \"none\", \"ordered\" or \"fs\"");
+            o.dither = *mode;
+        } else {
+            return fail(key, "is not a render setting");
+        }
+    }
+    return true;
+}
+
+ParseResult parseOptions(int argc, const char* const* argv, const Options& defaults) {
     ParseResult result;
     Options& o = result.options;
+    o = defaults;
+    // What to show always comes from this command line.
+    o.inputs.clear();
+    o.modelPath.clear();
 
     auto fail = [&](std::string message) {
         result.ok = false;
@@ -232,8 +347,8 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         std::string_view arg = argv[i];
 
         if (arg.empty() || arg[0] != '-' || arg == "-") {
-            if (!o.modelPath.empty()) return fail("more than one model given");
-            o.modelPath = std::string(arg);
+            o.inputs.emplace_back(arg);
+            if (o.modelPath.empty()) o.modelPath = o.inputs.front();
             continue;
         }
 
@@ -279,6 +394,7 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         else if (name == "--no-stats") o.stats = false;
         else if (name == "--spin") o.spin = o.spinExplicit = true;
         else if (name == "--paused") o.animationPaused = true;
+        else if (name == "--no-path") o.followPath = false;
         else if (name == "--shadows") o.shadows = true;
         else if (name == "--skybox") o.skybox = true;
         else if (name == "--no-skybox") o.skybox = false;
@@ -341,6 +457,9 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--fps") {
             if (!needValue()) return missing();
             if (!intOption(o.fpsLimit, 1, 1000)) return invalid();
+        } else if (name == "--camera-time") {
+            if (!needValue()) return missing();
+            if (!parseFloat(value, o.cameraTime) || o.cameraTime < 0.0f) return invalid();
         } else if (name == "--yaw") {
             if (!needValue()) return missing();
             float v = 0.0f;
@@ -400,9 +519,11 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--anim-time") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.animationTime) || o.animationTime < 0.0f) return invalid();
+            o.animationTimeSet = true;
         } else if (name == "--anim-speed") {
             if (!needValue()) return missing();
             if (!parseFloat(value, o.animationSpeed) || std::abs(o.animationSpeed) > 100.0f) return invalid();
+            o.animationSpeedSet = true;
         } else if (name == "--png") {
             if (!needValue()) return missing();
             if (value.empty()) return invalid();
@@ -452,8 +573,11 @@ ParseResult parseOptions(int argc, const char* const* argv) {
     }
 
     if (o.showHelp || o.showVersion || o.benchmark || o.benchmarkList) return result;
-    if (o.modelPath.empty() && o.demo.empty()) return fail("no model given");
-    if (!o.modelPath.empty() && !o.demo.empty()) return fail("give either a model file or --demo, not both");
+    if (o.inputs.empty() && o.demo.empty()) return fail("no model given");
+    if (!o.inputs.empty() && !o.demo.empty()) return fail("give either model files or --demo, not both");
+    // A scene file is a whole scene; it cannot be combined with more models.
+    const bool hasScene = std::any_of(o.inputs.begin(), o.inputs.end(), isSceneFile);
+    if (hasScene && o.inputs.size() > 1) return fail("a scene file cannot be combined with other files");
     return result;
 }
 

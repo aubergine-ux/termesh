@@ -69,6 +69,11 @@ jobs:
           "$bin" --demo knot --lod 1 --png lod.png --size 320x240
           "$bin" --benchmark --frames 2 --benchmark-json bench.json
           test -s lod.png && test -s bench.json
+          "$bin" examples/showroom.json --camera-time 3 --png showroom.png --size 480x320
+          "$bin" examples/flythrough.json --gif fly.gif --size 160x100 --frames 8
+          "$bin" examples/showroom.json --print --backend ascii --color none --cols 70 --rows 24
+          "$bin" examples/showroom.json --bench 20
+          test -s showroom.png && test -s fly.gif
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
 
   # Catch performance regressions: build this commit and the one before it,
@@ -99,7 +104,7 @@ jobs:
       - name: Compare
         run: |
           if git log -1 --pretty=%B | grep -qF '[perf-ok]'; then export PERF_ALLOW=1; fi
-          scripts/perf-check.sh build/termesh ../base/build/termesh
+          sh scripts/perf-check.sh build/termesh ../base/build/termesh
 
   sanitizers:
     name: Linux (ASan + UBSan)
@@ -129,3 +134,5 @@ jobs:
           build/termesh --demo knot --lod 2 --shadows --png lod.png --size 200x150
           build/termesh --demo tentacle --lod 2 --gif lod.gif --size 120x90 --frames 4
           build/termesh --benchmark --frames 2 > /dev/null
+          build/termesh examples/showroom.json --camera-time 2 --lod 1 --png scene.png --size 240x160
+          build/termesh examples/flythrough.json --gif fly.gif --size 120x80 --frames 6

@@ -18,6 +18,12 @@ Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, 
 
 Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const OrbitCamera& camera,
                       RenderSettings settings, const OffscreenTarget& target, RenderStats* stats) {
+    return renderOffscreen(
+        renderer, pool, items, [&](float aspect) { return camera.camera(aspect); }, std::move(settings), target, stats);
+}
+
+Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const CameraSource& camera,
+                      RenderSettings settings, const OffscreenTarget& target, RenderStats* stats) {
     const int blocks = std::max(target.blocks, 1);
     const int width = std::max(target.width / blocks, 1);
     const int height = std::max(target.height / blocks, 1);
@@ -32,7 +38,7 @@ Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const Draw
     settings.pixelScale = static_cast<float>(ssaa);
     settings.lodTolerance *= static_cast<float>(ssaa);
     const RenderStats s =
-        renderer.render(items, camera.camera(static_cast<float>(width) / static_cast<float>(height)), settings, fb);
+        renderer.render(items, camera(static_cast<float>(width) / static_cast<float>(height)), settings, fb);
     if (stats) *stats = s;
 
     Image resolved;

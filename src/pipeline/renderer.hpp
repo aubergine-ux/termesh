@@ -72,8 +72,9 @@ struct RenderSettings {
     // is at most this many framebuffer pixels. 0 always draws the original.
     float lodTolerance = 0.0f;
 
-    // Draw one mesh tinted, to show it is selected: its position in the
-    // draw list and in its model. -1 for none.
+    // Draw a mesh tinted, to show it is selected: its position in the draw
+    // list and in its model. An item with mesh -1 tints the whole model;
+    // item -1 tints nothing.
     int highlightItem = -1, highlightMesh = -1;
 };
 

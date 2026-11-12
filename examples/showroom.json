@@ -1,0 +1,21 @@
+// Four of the built-in models on a floor, lit by a sun and a spot light,
+// with the camera circling them. Run it with:  termesh examples/showroom.json
+{
+  "name": "showroom",
+  "models": [
+    { "demo": "plane", "name": "floor", "scale": 4 },
+    { "demo": "knot", "position": [-2.2, 1.1, 0], "scale": 0.8 },
+    { "demo": "cube", "position": [0, 0.65, -1.2], "rotation": [0, 30, 0], "scale": 0.65 },
+    { "demo": "sphere", "position": [2.2, 0.9, 0], "scale": 0.9,
+      "material": { "color": "#c8a24a", "metallic": 1, "roughness": 0.25 } },
+    { "demo": "tentacle", "position": [0, 0, 1.6], "scale": 0.45, "animation": "wave" }
+  ],
+  "lights": [
+    { "type": "directional", "direction": [-0.6, -1, -0.5], "color": "#fff4e0", "intensity": 2.2, "shadows": true },
+    { "type": "spot", "position": [0, 5, 3], "target": [0, 0.5, 0], "angle": 35, "blend": 0.4,
+      "color": "#9db8ff", "intensity": 30 }
+  ],
+  "environment": { "name": "sky", "intensity": 0.6, "skybox": false },
+  "camera": { "fov": 40, "turntable": { "seconds": 14, "elevation": 22, "distance": 0.7 } },
+  "render": { "shading": "pbr", "shadows": true, "background": "#14161c" }
+}

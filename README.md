@@ -52,6 +52,7 @@ a smooth, shaded, spinning view you can orbit with the mouse.
 | ⚡ | **Fast**: multithreaded tiles, SIMD (SSE2 / NEON), BVH frustum culling, automatic level of detail, and only the cells that changed are redrawn. A 95k-triangle model renders in about 2 ms, and detail and resolution adapt to hold a target frame rate. |
 | 🦊 | **Animation**: glTF skeletal animation with skinning, morph targets and cross-fades between clips, plus a timeline you can pause, scrub, slow down or run backwards. |
 | 🖱️ | **Interactive**: orbit, pan and zoom with the mouse or keyboard, click a mesh to inspect it, switch shading live, toggle auto-rotate and a stats bar. |
+| 🎬 | **Scenes**: several models with their own transforms, lights and a camera, described in a small [JSON scene file](docs/scenes.md); camera paths for turntables and flythroughs; a scene inspector sidebar. |
 | 📦 | **OBJ and glTF 2.0**: `.obj` + `.mtl`, `.gltf` and `.glb`, with embedded or external textures. |
 | 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
 | 🪶 | **Small and portable**: Linux, macOS and Windows Terminal. Three vendored single-header dependencies, one static binary. |
@@ -127,6 +128,8 @@ termesh fox.glb --animation Run         # play a named animation
 termesh fox.glb --list-animations       # see which animations a file has
 termesh model.glb -s pbr --env sky --shadows   # physically based, lit by a sky, with shadows
 termesh model.glb -s toon               # cel shading with ink outlines
+termesh a.glb b.glb c.obj               # several models side by side
+termesh examples/showroom.json          # a scene: models, lights, camera path
 ```
 
 ### Controls
@@ -135,6 +138,8 @@ termesh model.glb -s toon               # cel shading with ink outlines
 | ---------------------- | ------------------------- | ----------------------------- |
 | Orbit                  | drag                      | arrows, <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd> |
 | Select a mesh          | click                     |                               |
+| Scene inspector        | click a row               | <kbd>Tab</kbd>; arrows move, <kbd>←</kbd> <kbd>→</kbd> fold |
+| Follow the camera path / take over |               | <kbd>v</kbd>                  |
 | Pan                    | right-drag, or shift-drag | shift + arrows, <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> |
 | Zoom                   | wheel                     | <kbd>+</kbd> <kbd>-</kbd>     |
 | Auto-rotate on / off   |                           | <kbd>space</kbd>              |
@@ -186,6 +191,7 @@ termesh model.glb -s toon               # cel shading with ink outlines
 | `--target-fps <n>` | lower detail and resolution to hold this rate while moving; 0 never does (default: 30) |
 | `--lod <px>` | level of detail: error allowed in pixels, or `off` (default: 0.5 in the viewer, off for exports) |
 | `--yaw`, `--pitch`, `--zoom`, `--fov` | initial camera |
+| `--camera-time <s>`, `--no-path` | where along a scene's camera path to start; ignore the path |
 | `--spin`, `--no-spin`, `--spin-speed <deg/s>` | auto-rotation |
 | `--no-stats` | hide the status bar |
 | `--animation <a>` | animation to play, by number (from 1) or name |

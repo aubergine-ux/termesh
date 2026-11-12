@@ -61,8 +61,10 @@ add_library(termesh_core STATIC
     src/anim/skinning.cpp
     src/app/benchmark.cpp
     src/app/capabilities.cpp
+    src/app/inspector.cpp
     src/app/options.cpp
     src/app/viewer.cpp
+    src/core/json.cpp
     src/core/texture.cpp
     src/core/thread_pool.cpp
     src/export/gif.cpp
@@ -82,6 +84,9 @@ add_library(termesh_core STATIC
     src/scene/model.cpp
     src/scene/obj_loader.cpp
     src/scene/primitives.cpp
+    src/stage/camera_path.cpp
+    src/stage/scene.cpp
+    src/stage/scene_file.cpp
 )
 target_include_directories(termesh_core PUBLIC src)
 target_include_directories(termesh_core SYSTEM PUBLIC third_party)
@@ -119,6 +124,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_app.cpp
         tests/test_clip.cpp
         tests/test_input.cpp
+        tests/test_inspector.cpp
         tests/test_lod.cpp
         tests/test_math.cpp
         tests/test_output.cpp
@@ -126,8 +132,11 @@ if(TERMESH_BUILD_TESTS)
         tests/test_raster.cpp
         tests/test_render.cpp
         tests/test_scene.cpp
+        tests/test_stage.cpp
     )
     target_link_libraries(termesh_tests PRIVATE termesh_core termesh_warnings)
+    # So the tests can find the example scenes.
+    target_compile_definitions(termesh_tests PRIVATE TERMESH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     # doctest includes <ciso646> under Clang, which newer libstdc++ flags with
     # a #warning in C++20. It is harmless and not ours to fix.
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")

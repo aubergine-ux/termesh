@@ -1,0 +1,31 @@
+// A camera path: the camera glides past three models along a smooth curve
+// through five keyframes, then returns to the start.
+// Run it with:  termesh examples/flythrough.json
+{
+  "name": "flythrough",
+  "models": [
+    { "demo": "plane", "name": "floor", "scale": 8, "material": { "color": "#3a3f4a", "roughness": 0.9 } },
+    { "demo": "knot", "position": [-3, 1.2, 0] },
+    { "demo": "tentacle", "position": [0, 0, -1], "scale": 0.6, "animation": "curl" },
+    { "demo": "cube", "position": [3, 0.8, 0.5], "rotation": [0, 25, 0], "scale": 0.8 }
+  ],
+  "lights": [
+    { "type": "directional", "direction": [0.5, -1, -0.4], "intensity": 2, "shadows": true }
+  ],
+  "environment": { "name": "sunset", "skybox": true, "blur": 0.3 },
+  "camera": {
+    "fov": 50,
+    "path": {
+      "loop": true,
+      "duration": 20,
+      "keys": [
+        { "time": 0,  "position": [-7, 2.0, 5],  "target": [-3, 1, 0] },
+        { "time": 4,  "position": [-3, 1.4, 3.5], "target": [-1, 1, -0.5] },
+        { "time": 8,  "position": [0, 3.5, 4.5], "target": [0, 1, -1], "fov": 40 },
+        { "time": 12, "position": [3.5, 1.4, 3.5], "target": [2.5, 0.8, 0.3] },
+        { "time": 16, "position": [7, 2.6, 4],   "target": [2, 0.8, 0], "fov": 50 }
+      ]
+    }
+  },
+  "render": { "shading": "pbr", "shadows": true, "ssao": true }
+}

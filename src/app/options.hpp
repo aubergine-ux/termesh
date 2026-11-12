@@ -3,7 +3,9 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "core/json.hpp"
 #include "output/backend.hpp"
 #include "pipeline/renderer.hpp"
 #include "scene/camera.hpp"
@@ -12,8 +14,10 @@
 namespace termesh {
 
 struct Options {
-    // What to show: a model file, or a built-in demo.
-    std::string modelPath;
+    // What to show: model files, a scene file (.json), or a built-in demo.
+    // Several models are stood side by side.
+    std::vector<std::string> inputs;
+    std::string modelPath;  // the first of `inputs`
     std::string demo;
 
     // Output selection (unset = detect).
@@ -55,6 +59,8 @@ struct Options {
     float exposure = 0.0f;  // stops
 
     // Camera.
+    float cameraTime = 0.0f;          // where along a scene's camera path to start (or take a still)
+    bool followPath = true;           // play the scene's camera path, if it has one
     std::optional<float> yaw, pitch;  // degrees
     float zoom = 1.0f;                // > 1 moves closer
     float fov = 40.0f;                // vertical field of view, degrees
@@ -71,7 +77,8 @@ struct Options {
     float animationTime = 0.0f;   // where to start, in seconds
     float animationSpeed = 1.0f;  // playback rate
     bool animationPaused = false;
-    bool listAnimations = false;  // print the clips in the file and exit
+    bool animationTimeSet = false, animationSpeedSet = false;  // given, rather than defaults
+    bool listAnimations = false;                               // print the clips in the file and exit
 
     // Non-interactive modes.
     bool print = false;         // print one frame to the terminal and exit
@@ -99,7 +106,18 @@ struct ParseResult {
     std::string error;
 };
 
-ParseResult parseOptions(int argc, const char* const* argv);
+// Parse a command line. `defaults` is what every option starts as before
+// the arguments are read - normally the built-in defaults, but a scene
+// file's "render" settings can be slipped in underneath the command line
+// this way (see applySceneRenderSettings).
+ParseResult parseOptions(int argc, const char* const* argv, const Options& defaults = {});
+
+// Apply the "render" block of a scene file to a set of options. Returns
+// false and describes the problem if a setting is not understood.
+bool applySceneRenderSettings(const Json& render, Options& options, std::string& error);
+
+// True if a path names a scene file rather than a model.
+bool isSceneFile(const std::string& path);
 
 // Which clip `--animation` refers to: a 1-based number or a (case-insensitive)
 // name. Returns -1 if there is no such clip; an empty spec means the first.
@@ -109,6 +127,7 @@ int findAnimation(const Model& model, const std::string& spec);
 // environment is not part of them: load it with loadEnvironmentOption and
 // point RenderSettings::environment at it.
 RenderSettings makeRenderSettings(const Options& options);
+OrbitCamera makeCamera(const Options& options, const Bounds& bounds);
 
 // The environment `--env` asks for (a built-in name or a file), with
 // --env-intensity and --env-rotation applied. Returns false and sets `error`

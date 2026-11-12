@@ -501,8 +501,9 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
             meshInfo.twoSided = twoSided;
             meshInfo.mirrored = mirrored;
             meshInfo.blend = pass.sortTranslucent && material.alphaMode == AlphaMode::Blend;
-            meshInfo.highlight =
-                static_cast<int>(itemIndex) == pass.highlightItem && static_cast<int>(meshIndex) == pass.highlightMesh;
+            // A negative mesh index selects every mesh of the item.
+            meshInfo.highlight = static_cast<int>(itemIndex) == pass.highlightItem &&
+                                 (pass.highlightMesh < 0 || static_cast<int>(meshIndex) == pass.highlightMesh);
             meshInfo.needsLod =
                 mesh.hasUVs && (material.baseColorTexture >= 0 || material.normalTexture >= 0 ||
                                 material.emissiveTexture >= 0 || material.metallicRoughnessTexture >= 0);

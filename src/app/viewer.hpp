@@ -9,6 +9,7 @@
 
 #include "anim/player.hpp"
 #include "app/capabilities.hpp"
+#include "app/inspector.hpp"
 #include "app/options.hpp"
 #include "app/quality.hpp"
 #include "core/image.hpp"
@@ -18,15 +19,15 @@
 #include "pipeline/renderer.hpp"
 #include "scene/camera.hpp"
 #include "scene/model.hpp"
+#include "stage/scene.hpp"
 
 namespace termesh {
 
 class Viewer {
 public:
-    // `player` drives the model's animation; null for a static model.
-    // `environment` is the one chosen on the command line.
-    Viewer(const Options& options, Model& model, AnimationPlayer* player, const Environment& environment,
-           ThreadPool& pool);
+    // The scene must outlive the viewer. Its environment is the one to
+    // start with; its lights and camera path are used as they are.
+    Viewer(const Options& options, Scene& scene, ThreadPool& pool);
 
     // Runs until the user quits. Returns the process exit code.
     int run();
@@ -41,7 +42,12 @@ private:
     bool handleAnimationKey(char32_t ch);  // true if the key was an animation control
     bool handleEffectKey(char32_t ch);     // true if the key was a lighting / effect control
     void pickAt(int col, int row);         // select the mesh under a cell
-    void applyQuality(int level);          // size the framebuffer for a quality level
+    void select(int object, int mesh);     // -1, -1 clears the selection
+    void leavePath();                      // stop following the scene's camera path
+    Camera cameraFor(float aspect) const;
+    SceneObject* activeObject() const;  // the model the animation keys act on
+    AnimationPlayer* activePlayer() const;
+    void applyQuality(int level);  // size the framebuffer for a quality level
     Camera currentCamera() const;
     RenderSettings frameSettings() const;  // settings_ plus everything decided per frame
 
@@ -52,18 +58,24 @@ private:
     void drawFrame();
     void drawStatusBar(std::string& out);
     void drawHelp(std::string& out);
+    void drawInspector(std::string& out);
+    void toggleInspector();
+    void followInspector();  // highlight what the inspector has selected
     void saveScreenshot();
     void resetView();
     void notify(std::string message);
 
     const Options& options_;
-    Model& model_;
-    AnimationPlayer* player_;
+    Scene& scene_;
     ThreadPool& pool_;
     Renderer renderer_;
-    // Boxes and BVHs for the model: frustum culling and click-to-select.
-    ModelAccel accel_;
-    int selectedMesh_ = -1;
+    int selectedObject_ = -1, selectedMesh_ = -1;  // what has been clicked on
+
+    // The scene inspector: a sidebar, toggled with Tab.
+    Inspector inspector_;
+    bool showInspector_ = false;
+    int panelWidth_ = 0;                   // in columns, including its border; 0 when hidden
+    std::vector<std::string> panelShown_;  // the lines currently on screen
 
     Terminal terminal_;
     InputParser parser_;
@@ -89,9 +101,13 @@ private:
     float lodTolerance_ = 0.0f;  // output pixels; 0 = no level of detail
     // Levels of detail for a large static model are built off to the side
     // so the first frame does not wait for them.
-    std::future<std::vector<std::vector<MeshLod>>> pendingLods_;
+    std::future<std::vector<std::vector<std::vector<MeshLod>>>> pendingLods_;  // per object, per mesh
 
     OrbitCamera camera_;
+    // While the scene's camera path is being followed, the view comes from
+    // it and camera_ waits to take over.
+    bool followPath_ = false;
+    float pathTime_ = 0.0f;
     RenderSettings settings_;
     float lightYaw_ = 0.0f;
     // Environments to cycle through with 'e': the built-in ones, plus the
