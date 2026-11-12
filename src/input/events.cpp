@@ -166,7 +166,8 @@ std::size_t InputParser::parseCsi(std::vector<InputEvent>& out) {
         if (i >= buffer_.size()) return buffer_.size() > 256 ? buffer_.size() : 0;
         const char c = buffer_[i];
         if (c >= '0' && c <= '9') {
-            current = current * 10 + (c - '0');
+            // Saturate: a hostile or broken terminal can send any number of digits.
+            if (current < 100'000'000) current = current * 10 + (c - '0');
             haveDigits = true;
         } else if (c == ';' || c == ':') {
             params.push_back(current);

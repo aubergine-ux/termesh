@@ -168,3 +168,11 @@ TEST_CASE("input: unknown sequences are skipped without derailing the stream") {
     CHECK(asKey(events[1]).character == U'b');
     CHECK(asKey(events[2]).character == U'c');
 }
+
+TEST_CASE("input: absurdly long numbers saturate instead of overflowing") {
+    const auto events = parse("\x1b[<0;99999999999999999999;99999999999999999999M" "\x1b[99999999999999999999;1R" "z");
+    REQUIRE(events.size() >= 2);
+    CHECK(asMouse(events[0]).col > 0);
+    CHECK(asMouse(events[0]).row > 0);
+    CHECK(asKey(events.back()).character == U'z');
+}
