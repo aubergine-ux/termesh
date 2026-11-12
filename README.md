@@ -1,23 +1,28 @@
 <div align="center">
 
-# termesh
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/banner-light.svg">
+  <img src="docs/media/banner-light.svg" alt="termesh" width="620">
+</picture>
 
-**A 3D model viewer that lives in your terminal.**
+**A 3D model viewer that lives in your terminal.**<br>
+Textured, lit, depth-buffered 3D from a software rasterizer written from scratch in C++20. No OpenGL, no GPU.
 
-Textured, lit, depth-buffered 3D - drawn by a software rasterizer written from scratch in C++20.<br>
-No OpenGL. No GPU. Just triangles, maths and escape codes.
+[![Build](https://img.shields.io/github/actions/workflow/status/aubergine-ux/termesh/ci.yml?branch=main&style=flat-square&label=build&logo=githubactions&logoColor=white)](https://github.com/aubergine-ux/termesh/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/aubergine-ux/termesh?style=flat-square&color=8b5cf6&label=release)](https://github.com/aubergine-ux/termesh/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-06b6d4?style=flat-square)](LICENSE)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-00599c?style=flat-square&logo=cplusplus&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-475569?style=flat-square)
 
-[![CI](https://github.com/aubergine-ux/termesh/actions/workflows/ci.yml/badge.svg)](https://github.com/aubergine-ux/termesh/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-3b82f6.svg)](LICENSE)
-![C++20](https://img.shields.io/badge/C%2B%2B-20-00599c.svg?logo=cplusplus&logoColor=white)
-![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-4b5563.svg)
+[Install](#-install) · [Usage](#-usage) · [Backends](#-output-backends) · [How it works](#-how-it-works) · [Architecture](ARCHITECTURE.md)
 
 <br>
 
 <img src="docs/media/hero.gif" alt="A textured flight helmet model spinning in a terminal, drawn with half-block characters" width="748">
 
 <sub>
-<code>termesh FlightHelmet.gltf</code> - 94,722 triangles, drawn with half-block characters.<br>
+<code>termesh FlightHelmet.gltf</code> · 94,722 triangles, drawn with half-block characters.<br>
 This is the program's real terminal output, captured and replayed frame by frame.
 </sub>
 
@@ -32,25 +37,60 @@ termesh model.glb
 That is the whole interface. termesh loads the model, works out what your terminal can display, and gives you
 a smooth, shaded, spinning view you can orbit with the mouse.
 
-## Highlights
+## ✨ Features
 
 |     |     |
-| --- | --- |
-| **A complete pipeline, from scratch** | Vertex transform, homogeneous clipping, perspective divide, back-face culling, tile-based rasterization with a depth buffer, perspective-correct interpolation. |
-| **Real shading** | Flat, Gouraud and Phong lighting; diffuse, normal, metallic-roughness and emissive textures; mip-mapping with trilinear filtering; hidden-line wireframe. |
-| **Five ways to draw** | Kitty graphics and Sixel for real pixels, half-blocks in 24-bit colour, Braille dots for wireframe, plain ASCII for everything else. The best one is detected automatically. |
-| **Fast** | Multithreaded tiles, SIMD coverage and depth tests (SSE2 / NEON), and only the terminal cells that changed are redrawn. A 95k-triangle model renders in under 3 ms. |
-| **OBJ and glTF 2.0** | `.obj` + `.mtl`, `.gltf` and `.glb`, with embedded or external textures. |
-| **Exports** | Save the current view as a PNG, record a turntable GIF, or print a single frame into your scrollback. |
-| **Small and portable** | Linux, macOS and Windows Terminal. Three vendored single-header dependencies. One static binary. |
-| **Meant to be read** | The renderer is a few thousand lines of commented C++, with a guided tour in [ARCHITECTURE.md](ARCHITECTURE.md). |
+| :-: | --- |
+| 🔺 | **A complete pipeline, from scratch**: vertex transform, homogeneous clipping, back-face culling, depth-buffered tile rasterization, perspective-correct texturing. |
+| 💡 | **Real shading**: flat, Gouraud and Phong lighting, diffuse and normal maps, mip-mapping, hidden-line wireframe. |
+| 🖥️ | **Five ways to draw**: Kitty graphics, Sixel, 24-bit half-blocks, Braille dots and plain ASCII. The best one is picked automatically. |
+| ⚡ | **Fast**: multithreaded tiles, SIMD (SSE2 / NEON), and only the cells that changed are redrawn. A 95k-triangle model renders in under 3 ms. |
+| 🖱️ | **Interactive**: orbit, pan and zoom with the mouse or keyboard, switch shading live, toggle auto-rotate and a stats bar. |
+| 📦 | **OBJ and glTF 2.0**: `.obj` + `.mtl`, `.gltf` and `.glb`, with embedded or external textures. |
+| 🎞️ | **Exports**: save the view as a PNG, record a turntable GIF, or print one frame into your scrollback. |
+| 🪶 | **Small and portable**: Linux, macOS and Windows Terminal. Three vendored single-header dependencies, one static binary. |
+| 📖 | **Meant to be read**: a few thousand lines of commented C++, with a guided tour in [ARCHITECTURE.md](ARCHITECTURE.md). |
 
-## Install
+## 📥 Install
 
-**Pre-built binaries** for Linux, macOS (universal) and Windows are on the
-[releases page](https://github.com/aubergine-ux/termesh/releases/latest). Unpack and run - there is nothing to install.
+Grab a pre-built binary from the [latest release](https://github.com/aubergine-ux/termesh/releases/latest).
+There is nothing to install: unpack and run.
 
-**From source** - you need CMake 3.20+ and a C++20 compiler (recent GCC, Clang, Apple Clang or MSVC 2022):
+<details open>
+<summary><b>Linux</b> (x86_64)</summary>
+
+```sh
+curl -LO https://github.com/aubergine-ux/termesh/releases/latest/download/termesh-linux-x86_64.tar.gz
+tar -xzf termesh-linux-x86_64.tar.gz
+./termesh-linux-x86_64/termesh --demo knot
+```
+
+</details>
+
+<details>
+<summary><b>macOS</b> (Apple Silicon and Intel)</summary>
+
+```sh
+curl -LO https://github.com/aubergine-ux/termesh/releases/latest/download/termesh-macos-universal.tar.gz
+tar -xzf termesh-macos-universal.tar.gz
+./termesh-macos-universal/termesh --demo knot
+```
+
+</details>
+
+<details>
+<summary><b>Windows</b> (x86_64, PowerShell in Windows Terminal)</summary>
+
+```powershell
+Invoke-WebRequest https://github.com/aubergine-ux/termesh/releases/latest/download/termesh-windows-x86_64.zip -OutFile termesh.zip
+Expand-Archive termesh.zip -DestinationPath .
+.\termesh-windows-x86_64\termesh.exe --demo knot
+```
+
+</details>
+
+<details>
+<summary><b>From source</b> (CMake 3.20+ and a C++20 compiler)</summary>
 
 ```sh
 git clone https://github.com/aubergine-ux/termesh.git
@@ -60,10 +100,15 @@ cmake --build build --parallel
 ./build/termesh --demo knot
 ```
 
-No model to hand? `--demo knot`, `--demo cube` and `--demo sphere` are built in, and
-[`scripts/fetch-samples.sh`](scripts/fetch-samples.sh) downloads a few public-domain glTF models to play with.
+Recent GCC, Clang, Apple Clang and MSVC 2022 all work. With a multi-config generator such as Visual Studio,
+build with `cmake --build build --config Release` and run `build\Release\termesh.exe`.
 
-## Usage
+</details>
+
+No model to hand? `--demo knot`, `--demo cube` and `--demo sphere` are built in, and
+[`scripts/fetch-samples.sh`](scripts/fetch-samples.sh) downloads a few CC0 glTF models to play with.
+
+## 🚀 Usage
 
 ```sh
 termesh model.glb                       # view a model
@@ -121,37 +166,7 @@ termesh model.glb --print               # print one frame and exit
 
 </details>
 
-## Output backends
-
-termesh asks the terminal what it supports at start-up and picks the best option. Press <kbd>b</kbd> to step
-through the others.
-
-<div align="center">
-<img src="docs/media/backends.png" alt="The same model drawn with the pixel, half-block, Braille and ASCII backends" width="940">
-</div>
-
-| Backend      | Resolution per cell | Used when                                                            |
-| ------------ | ------------------- | -------------------------------------------------------------------- |
-| `kitty`      | real pixels         | the terminal answers a kitty graphics query (kitty, Ghostty, WezTerm, Konsole…) |
-| `sixel`      | real pixels         | the terminal reports sixel support (foot, xterm, mlterm, Windows Terminal 1.22+…) |
-| `halfblock`  | 1 × 2 pixels        | Unicode and colour are available - nearly every modern terminal      |
-| `braille`    | 2 × 4 dots          | wireframe mode on a half-block terminal switches to this automatically |
-| `ascii`      | 1 character         | nothing else works; also handy over a slow link                      |
-
-Cell-based backends keep a copy of what is on screen and send only the cells that changed, wrapped in a
-synchronized update so frames never tear.
-
-## Shading
-
-<div align="center">
-<img src="docs/media/shading.png" alt="The same model with flat, Gouraud and Phong shading, and as a wireframe" width="876">
-</div>
-
-All three modes use the same Blinn-Phong lighting; what changes is how often it is evaluated. Flat shading
-lights each triangle once, Gouraud lights each vertex and interpolates the colour, and Phong interpolates the
-normal and lights every pixel - which is also what makes normal maps possible.
-
-## Exporting
+### Exporting
 
 ```sh
 # A 1920×1080 still of the default view
@@ -170,7 +185,37 @@ termesh model.glb --print --cols 60
 In the viewer, <kbd>p</kbd> saves the current view as `termesh-<model>-NN.png`. PNG encoding uses
 stb_image_write; the GIF encoder (median-cut palette, LZW, inter-frame deltas) is part of termesh.
 
-## How it works
+## 🖼️ Output backends
+
+termesh asks the terminal what it supports at start-up and picks the best option. Press <kbd>b</kbd> to step
+through the others.
+
+<div align="center">
+<img src="docs/media/backends.png" alt="The same model drawn with the pixel, half-block, Braille and ASCII backends" width="940">
+</div>
+
+| Backend      | Resolution per cell | Used when                                                            |
+| ------------ | ------------------- | -------------------------------------------------------------------- |
+| `kitty`      | real pixels         | the terminal answers a kitty graphics query (kitty, Ghostty, WezTerm, Konsole…) |
+| `sixel`      | real pixels         | the terminal reports sixel support (foot, xterm, mlterm, Windows Terminal 1.22+…) |
+| `halfblock`  | 1 × 2 pixels        | Unicode and colour are available, which covers nearly every modern terminal |
+| `braille`    | 2 × 4 dots          | wireframe mode on a half-block terminal switches to this automatically |
+| `ascii`      | 1 character         | nothing else works; also handy over a slow link                      |
+
+Cell-based backends keep a copy of what is on screen and send only the cells that changed, wrapped in a
+synchronized update so frames never tear.
+
+## 🎨 Shading
+
+<div align="center">
+<img src="docs/media/shading.png" alt="The same model with flat, Gouraud and Phong shading, and as a wireframe" width="876">
+</div>
+
+All three modes use the same Blinn-Phong lighting; what changes is how often it is evaluated. Flat shading
+lights each triangle once, Gouraud lights each vertex and interpolates the colour, and Phong interpolates the
+normal and lights every pixel, which is also what makes normal maps possible.
+
+## 🔧 How it works
 
 ```
  model file ─► loader ─► vertex stage ─► clipping ─► projection + culling
@@ -178,23 +223,41 @@ stb_image_write; the GIF encoder (median-cut palette, LZW, inter-frame deltas) i
    terminal ◄─ backend ◄─ resolve ◄─ shading ◄─ rasterizer ◄─ tile binning
 ```
 
-1. **Vertex stage** - every vertex is transformed to clip space once, in parallel.
-2. **Clipping** - triangles crossing the view frustum are cut in homogeneous coordinates (Sutherland-Hodgman),
+1. **Vertex stage**: every vertex is transformed to clip space once, in parallel.
+2. **Clipping**: triangles crossing the view frustum are cut in homogeneous coordinates (Sutherland-Hodgman),
    before the perspective divide can misbehave.
-3. **Setup** - divide by *w*, map to the viewport, cull back faces, snap to a 1/16-pixel grid.
-4. **Binning** - triangles are sorted into 32×32-pixel tiles, and tiles are handed to worker threads.
-5. **Rasterization** - integer edge functions with a top-left fill rule decide coverage, four pixels at a time
+3. **Setup**: divide by *w*, map to the viewport, cull back faces, snap to a 1/16-pixel grid.
+4. **Binning**: triangles are sorted into 32×32-pixel tiles, and tiles are handed to worker threads.
+5. **Rasterization**: integer edge functions with a top-left fill rule decide coverage, four pixels at a time
    with SIMD; survivors are depth-tested.
-6. **Shading** - attributes are interpolated with perspective correction and fed to the fragment shader.
-7. **Resolve and present** - supersamples are averaged in linear light and the image is handed to a backend.
+6. **Shading**: attributes are interpolated with perspective correction and fed to the fragment shader.
+7. **Resolve and present**: supersamples are averaged in linear light and the image is handed to a backend.
 
 **[ARCHITECTURE.md](ARCHITECTURE.md)** walks through each stage in detail, with the maths behind clipping and
 perspective-correct interpolation and pointers into the code.
 
-## Performance
+<details>
+<summary><b>Source layout</b></summary>
 
-The [Flight Helmet](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/FlightHelmet) model -
-94,722 triangles, fifteen textures - on a Ryzen 7 5800X (8 cores / 16 threads), measured with
+```
+src/
+├── math/       vectors, matrices, quaternions
+├── core/       framebuffer, textures, colour, thread pool
+├── scene/      model, camera, OBJ and glTF loaders
+├── pipeline/   vertex stage, clipping, lighting, renderer
+├── raster/     triangle and line rasterizer, SIMD wrappers
+├── output/     kitty, sixel, half-block, Braille, ASCII
+├── input/      raw terminal I/O, key and mouse parsing
+├── export/     PNG, GIF, off-screen rendering
+└── app/        command line, capability detection, viewer
+```
+
+</details>
+
+## ⚡ Performance
+
+The [Flight Helmet](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/FlightHelmet) model
+(94,722 triangles, fifteen textures) on a Ryzen 7 5800X with 8 cores / 16 threads, measured with
 `termesh FlightHelmet.gltf --bench 300`:
 
 | Render target                                         | Flat    | Gouraud | Phong   |
@@ -208,7 +271,7 @@ core holds 30 fps. In practice the terminal emulator is the limit, which is why 
 send as little as possible: for a spinning model a half-block frame is a few tens of kilobytes, against a
 couple of hundred for a full redraw.
 
-## Building and testing
+## 🧪 Building and testing
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -225,37 +288,32 @@ ctest --test-dir build --output-on-failure
 The tests cover the maths library, clipping, the rasterizer's fill rule and perspective correction, texture
 sampling, both loaders, every output backend, the GIF encoder and the input parser. CI runs them on Linux
 (GCC, Clang, and with SIMD disabled), macOS on Apple Silicon and Windows with MSVC, plus an
-AddressSanitizer / UBSan build.
+AddressSanitizer / UBSan build. Formatting follows the checked-in `.clang-format`.
 
-```
-src/
-├── math/       vectors, matrices, quaternions
-├── core/       framebuffer, textures, colour, thread pool
-├── scene/      model, camera, OBJ and glTF loaders
-├── pipeline/   vertex stage, clipping, lighting, renderer
-├── raster/     triangle and line rasterizer, SIMD wrappers
-├── output/     kitty, sixel, half-block, Braille, ASCII
-├── input/      raw terminal I/O, key and mouse parsing
-├── export/     PNG, GIF, off-screen rendering
-└── app/        command line, capability detection, viewer
-```
+## 🚧 Limitations
 
-## Limitations
+termesh is a viewer for static models.
 
-termesh is a viewer for static models. It does not play animations or apply skinning and morph targets, it
-ignores vertex colours and secondary UV sets, and it cannot read Draco- or meshopt-compressed geometry or
-KTX2 / WebP textures. Translucent materials are drawn as cut-outs rather than blended. Lighting is
-Blinn-Phong with a fixed light rig, not physically based rendering - glTF metallic-roughness materials are
-approximated.
+- No animation, skinning or morph targets.
+- Vertex colours and secondary UV sets are ignored.
+- Draco- and meshopt-compressed geometry and KTX2 / WebP textures are not supported.
+- Translucent materials are drawn as cut-outs rather than blended.
+- Lighting is Blinn-Phong with a fixed light rig, so glTF metallic-roughness materials are approximated.
 
-## Credits
+## 🙏 Credits
 
-- [cgltf](https://github.com/jkuhlmann/cgltf) by Johannes Kuhlmann - glTF parsing (MIT)
-- [stb_image and stb_image_write](https://github.com/nothings/stb) by Sean Barrett - image decoding and PNG writing (public domain / MIT)
-- [doctest](https://github.com/doctest/doctest) by Viktor Kirilov - unit testing (MIT)
+- [cgltf](https://github.com/jkuhlmann/cgltf) by Johannes Kuhlmann, for glTF parsing (MIT)
+- [stb_image and stb_image_write](https://github.com/nothings/stb) by Sean Barrett, for image decoding and PNG writing (public domain / MIT)
+- [doctest](https://github.com/doctest/doctest) by Viktor Kirilov, for unit testing (MIT)
 - The models in the images above are *Flight Helmet*, *Boom Box* and *Avocado* from the
   [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets), all released under CC0.
 
-## License
+<br>
 
-[MIT](LICENSE)
+<div align="center">
+
+Released under the [MIT License](LICENSE) · Made by [Aubergine-UX](https://github.com/aubergine-ux)
+
+<sub>If termesh made your terminal a little more three-dimensional, a ⭐ is appreciated.</sub>
+
+</div>
