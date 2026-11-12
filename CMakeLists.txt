@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(termesh
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "3D model viewer for the terminal with a from-scratch software rasterizer"
     LANGUAGES CXX)
 
