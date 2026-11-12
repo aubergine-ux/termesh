@@ -194,7 +194,9 @@ void Viewer::drawStatusBar(std::string& out) {
         const std::string target = std::string(backendName(backend_->kind())) + " " + std::to_string(imageWidth_) +
                                    "x" + std::to_string(imageHeight_);
         char fps[32], timing[96];
-        std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
+        // Nothing is drawn while nothing moves, so a rate would be meaningless.
+        if (autoRotate_ || dragging_) std::snprintf(fps, sizeof(fps), "%.0f fps", fps_);
+        else std::snprintf(fps, sizeof(fps), "idle");
         std::snprintf(timing, sizeof(timing), "render %.1f ms, present %.1f ms",
                       stats_.vertexMs + stats_.setupMs + stats_.rasterMs, presentMs_);
 
