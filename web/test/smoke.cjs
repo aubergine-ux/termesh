@@ -87,6 +87,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     await frames(3);
     assert(output().includes("tri"), "the dropped model's name is not in the status bar");
 
+    // The physics demo runs, and takes its keys.
+    written = [];
+    assert.strictEqual(start(["--demo", "physics", "--bodies", "8"]), 0, errors.join("\n"));
+    await frames(4);
+    type("\r");
+    await frames(4);
+    assert(output().includes("physics"), "the physics demo did not draw");
+
     // Failures are reported, not fatal.
     errors.length = 0;
     assert.notStrictEqual(start(["/drop/missing.glb"]), 0);
