@@ -33,6 +33,13 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [23. Camera paths](#23-camera-paths)
 - [24. The inspector](#24-the-inspector)
 - [25. More formats: STL, PLY, point clouds](#25-more-formats-stl-ply-point-clouds)
+- [26. Previews for file managers](#26-previews-for-file-managers)
+- [27. libtermesh: the C API](#27-libtermesh-the-c-api)
+- [28. The Python package](#28-the-python-package)
+- [29. WebAssembly and the browser playground](#29-webassembly-and-the-browser-playground)
+- [30. Recording a session](#30-recording-a-session)
+- [31. Rigid-body physics](#31-rigid-body-physics)
+- [32. Plugins](#32-plugins)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -69,7 +76,7 @@ C++ operating on arrays of floats and bytes.
 | ---------------- | -------------------------------------------------------------------------------- |
 | `src/math/`      | `Vec2/3/4`, `Mat4`, `Quat`. Header-only, no dependencies.                        |
 | `src/core/`      | Framebuffer, images, textures (mipmaps, filtering), colour space, thread pool, JSON. |
-| `src/scene/`     | `Model` / `Mesh` / `Material`, rig data, the orbit camera, OBJ and glTF loaders, demos. |
+| `src/scene/`     | `Model` / `Mesh` / `Material`, rig data, lights, environments, the orbit camera, the OBJ, glTF, STL and PLY loaders, demos. |
 | `src/anim/`      | Keyframe sampling, pose blending, skinning and morph targets, the timeline.      |
 | `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, shading models, shadows, resolve. |
 | `src/post/`      | Post-processing: sky, SSAO, outlines, bloom, tone mapping, FXAA.                 |
@@ -77,9 +84,17 @@ C++ operating on arrays of floats and bytes.
 | `src/stage/`     | Scenes of several models, scene files, camera paths.                             |
 | `src/raster/`    | The triangle and line rasterizer and the SIMD wrappers it uses.                  |
 | `src/output/`    | Terminal backends and the cell-diffing writer.                                   |
-| `src/input/`     | Raw terminal access (POSIX / Windows) and the input parser.                      |
-| `src/export/`    | Off-screen rendering, PNG and GIF writing.                                       |
-| `src/app/`       | Command line, capability detection, the interactive viewer, inspector, benchmarks, `main`. |
+| `src/input/`     | Raw terminal access (POSIX / Windows / WebAssembly) and the input parser.        |
+| `src/export/`    | Off-screen rendering, PNG and GIF writing, session recording.                    |
+| `src/physics/`   | Rigid bodies, contact generation, the solver, and the physics demo.              |
+| `src/plugin/`    | Loading plugins: the program's side of `include/termesh_plugin.h`.               |
+| `src/capi/`      | libtermesh: the implementation of `include/termesh.h`.                           |
+| `src/web/`       | Entry points of the WebAssembly build.                                           |
+| `src/app/`       | Command line, capability detection, the interactive viewer, inspector, previews, benchmarks, `main`. |
+| `include/`       | The two public C headers: the library's API and the plugin interface.            |
+| `python/`        | The Python package: bindings, the module, its tests.                             |
+| `web/`           | The playground page for the WebAssembly build, and its Node test.                |
+| `examples/`      | Scene files, a C program using the library, two plugins.                         |
 | `tests/`         | doctest unit tests.                                                              |
 | `third_party/`   | cgltf, stb_image, stb_image_write, doctest - single headers, vendored.           |
 
@@ -1639,8 +1654,28 @@ macOS and Windows, and any build from source, have it.
   dithering: averages preserved, backgrounds untouched, each backend's
   behaviour in each mode.
 - `test_input.cpp` - the input parser, including sequences split across reads.
+- `test_record.cpp` - asciinema casts as valid JSON line by line (escaping,
+  invalid UTF-8), frames paced to a steady rate, scaling to on-screen shape,
+  sessions written as GIF and - where ffmpeg is installed - MP4.
+- `test_physics.cpp` - mass and inertia, free fall against the textbook,
+  contact generation for every pair of shapes (face, corner and edge cases of
+  box against box), bouncing, stacking, friction turning sliding into
+  rolling, momentum, sleeping, and the demo settling with nothing through
+  the floor.
+- `test_plugin.cpp` - the two example plugins loaded as real shared
+  libraries: a new format read through one, a frame drawn through the other,
+  and every way loading can fail.
+- `test_capi.cpp` - the C API from outside, linked only against the built
+  library: every function, errors instead of exceptions, structs from an
+  "older header", and use from several threads.
+- `python/tests/` - the Python package, with pytest.
+- `web/test/smoke.cjs` - the WebAssembly viewer driven from Node through a
+  fake terminal: keys, mouse, resizing, dropped files, failures.
 
 CI builds and runs all of it on Linux (GCC, Clang, and with SIMD disabled),
 macOS on Apple Silicon (the NEON path) and Windows (MSVC), plus an
-AddressSanitizer / UBSan job and the [performance
-comparison](#21-benchmarks-and-performance-regressions).
+AddressSanitizer / UBSan job, the [performance
+comparison](#21-benchmarks-and-performance-regressions), a WebAssembly job
+(the unit tests and the program under Node), the Python package on all three
+systems, the Assimp backend, and a job that installs libtermesh and builds a
+C program against it through pkg-config and through CMake.

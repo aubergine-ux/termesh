@@ -5,6 +5,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Run by hand, it builds and packages everything but publishes nothing: a
+  # rehearsal for a release.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -49,6 +52,9 @@ jobs:
           mkdir "${{ matrix.asset }}"
           cp build/termesh README.md LICENSE "${{ matrix.asset }}/"
           strip "${{ matrix.asset }}/termesh"
+          # libtermesh and the headers, for programs that embed the renderer.
+          cmake --install build --prefix stage
+          cp -R stage/lib stage/include "${{ matrix.asset }}/"
           tar -czf "${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
 
       - name: Package (Windows)
@@ -57,6 +63,10 @@ jobs:
         run: |
           New-Item -ItemType Directory "${{ matrix.asset }}" | Out-Null
           Copy-Item build/Release/termesh.exe, README.md, LICENSE "${{ matrix.asset }}/"
+          # libtermesh and the headers, for programs that embed the renderer.
+          cmake --install build --config Release --prefix stage
+          Copy-Item stage/bin/libtermesh.dll "${{ matrix.asset }}/"
+          Copy-Item -Recurse stage/lib, stage/include "${{ matrix.asset }}/"
           Compress-Archive -Path "${{ matrix.asset }}" -DestinationPath "${{ matrix.asset }}.zip"
 
       - uses: actions/upload-artifact@v4
@@ -68,6 +78,7 @@ jobs:
 
   publish:
     name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
