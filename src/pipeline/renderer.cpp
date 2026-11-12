@@ -55,13 +55,41 @@ struct FragmentShader {
     Lights lights;
     Vec3 eye;
     Color8 background;
-    float wireHalfWidth;
+    int lineWidth;
     bool perPixelLighting, wireframe, textures, normalMaps;
 
     int varyingCount() const { return perPixelLighting ? kPhongVaryingCount : kLitVaryingCount; }
-    bool wantsEdgeDistance() const { return wireframe; }
 
+    // In wireframe mode the triangles themselves only lay down depth (pushed
+    // back a little, see rasterizeTile) and the edges are drawn over them.
+    float depthSlopeBias() const { return wireframe ? static_cast<float>(lineWidth) * 0.5f + 1.0f : 0.0f; }
+
+    // Triangle interiors.
     bool operator()(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
+        if (!wireframe) return shade(tri, frag, out);
+        // Paint background, but still occupy the depth buffer so that lines
+        // behind this surface stay hidden. Cut-outs remain see-through.
+        if (!passesAlphaTest(tri, frag)) return false;
+        out = background;
+        return true;
+    }
+
+    // Wireframe lines: shaded like the surface they belong to, then
+    // lightened so they read against a dark background.
+    bool shadeEdge(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
+        return shade(tri, frag, out);
+    }
+
+    bool passesAlphaTest(const RasterTriangle& tri, const Fragment& frag) const {
+        const Material& material = model->materials[tri.material];
+        if (material.alphaMode != AlphaMode::Mask) return true;
+        float alpha = material.baseColor.w;
+        if (material.baseColorTexture >= 0)
+            alpha *= model->textures[material.baseColorTexture].sample({frag.varyings[kUV], frag.varyings[kUV + 1]}, tri.lod).w;
+        return alpha >= material.alphaCutoff;
+    }
+
+    bool shade(const RasterTriangle& tri, const Fragment& frag, Color8& out) const {
         const Material& material = model->materials[tri.material];
         const float* v = frag.varyings;
         const Vec2 uv{v[kUV], v[kUV + 1]};
@@ -74,16 +102,6 @@ struct FragmentShader {
             else base.w *= texel.w;
         }
         if (material.alphaMode == AlphaMode::Mask && base.w < material.alphaCutoff) return false;
-
-        if (wireframe) {
-            // Away from every real edge: paint background, but still occupy
-            // the depth buffer so lines behind this surface stay hidden.
-            const float d = std::min({frag.edgeDistance[0], frag.edgeDistance[1], frag.edgeDistance[2]});
-            if (d > wireHalfWidth) {
-                out = background;
-                return true;
-            }
-        }
 
         float metallic = material.metallic, roughness = material.roughness, occlusion = 1.0f;
         if (textures && material.metallicRoughnessTexture >= 0) {
@@ -148,7 +166,7 @@ struct FragmentShader {
 struct SetupContext {
     float width, height;         // framebuffer size
     std::int32_t maxX, maxY;     // ...in fixed point
-    bool cullBackfaces, wireframe;
+    bool cullBackfaces;
     int varyingCount;
 };
 
@@ -229,20 +247,6 @@ void emitTriangle(const ClipVertex* verts[3], std::uint8_t edgeMask, const Trian
             static_cast<float>(area < 0 ? -area : area) / (kSubpixelScale * kSubpixelScale);
         tri.lod = uvArea > 0.0f ? 0.5f * std::log2(uvArea / pixelArea) : 0.0f;
     }
-
-    if (ctx.wireframe) {
-        const int a[3] = {1, 2, 0}, b[3] = {2, 0, 1};
-        for (int i = 0; i < 3; ++i) {
-            if (!(edgeMask & (1 << i))) {
-                tri.edgeScale[i] = 1e30f;  // not a mesh edge: never "near" it
-                continue;
-            }
-            const float dx = static_cast<float>(tri.x[b[i]] - tri.x[a[i]]);
-            const float dy = static_cast<float>(tri.y[b[i]] - tri.y[a[i]]);
-            const float len = std::sqrt(dx * dx + dy * dy);
-            tri.edgeScale[i] = len > 0.0f ? 1.0f / (len * kSubpixelScale) : 1e30f;
-        }
-    }
 }
 
 }  // namespace
@@ -270,7 +274,6 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
     ctx.maxX = width * kSubpixelScale;
     ctx.maxY = height * kSubpixelScale;
     ctx.cullBackfaces = settings.cullBackfaces;
-    ctx.wireframe = settings.wireframe;
     ctx.varyingCount = phong ? kPhongVaryingCount : kLitVaryingCount;
 
     std::size_t chunkCount = 0;
@@ -432,7 +435,7 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
     shader.eye = camera.position;
     shader.background = settings.background;
     shader.background.a = 0;  // alpha 0 marks "no geometry here"
-    shader.wireHalfWidth = settings.wireWidth * 0.5f + 0.25f;
+    shader.lineWidth = std::max(static_cast<int>(std::lround(settings.wireWidth)), 1);
     shader.perPixelLighting = phong;
     shader.wireframe = settings.wireframe;
     shader.textures = settings.textures;
@@ -454,6 +457,8 @@ RenderStats Renderer::render(const Model& model, const Camera& camera, const Ren
 
         const auto& bin = bins_[index];
         rasterizeTile(fb, tile, bin.data(), bin.size(), shader);
+        // Lines go on after every triangle in the tile has written its depth.
+        if (shader.wireframe) rasterizeTileEdges(fb, tile, bin.data(), bin.size(), shader, shader.lineWidth);
     });
     stats.rasterMs = msSince(t0);
 

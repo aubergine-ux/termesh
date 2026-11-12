@@ -6,6 +6,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "core/framebuffer.hpp"
@@ -36,7 +37,6 @@ struct RasterTriangle {
     float z[3];               // depth in [0, 1], 0 = near plane
     float invW[3];            // 1 / clip-space w, for perspective correction
     float varyings[3][kMaxVaryings];
-    float edgeScale[3];       // 1 / (edge length in subpixels * 16); see Fragment
     float lod;                // texture level-of-detail bias for the whole triangle
     float tangentSign;        // handedness of the tangent frame (+1 / -1)
     std::uint16_t material;
@@ -47,7 +47,6 @@ struct RasterTriangle {
 // What the fragment shader receives for one pixel.
 struct Fragment {
     float varyings[kMaxVaryings];  // interpolated with perspective correction
-    float edgeDistance[3];         // distance in pixels to each triangle edge
 };
 
 // A rectangle of pixels; x1 and y1 are exclusive.
@@ -80,9 +79,9 @@ constexpr bool isTopLeftEdge(std::int32_t ax, std::int32_t ay, std::int32_t bx, 
 // tiles of the same framebuffer at once.
 //
 // Shader requirements:
-//     int  varyingCount() const;         how many varyings to interpolate
-//     bool wantsEdgeDistance() const;    fill in Fragment::edgeDistance?
-//     bool operator()(const RasterTriangle&, const Fragment&, Color8& out) const;
+//     int   varyingCount() const;        how many varyings to interpolate
+//     float depthSlopeBias() const;      0 normally; see "polygon offset" below
+//     bool  operator()(const RasterTriangle&, const Fragment&, Color8& out) const;
 //                                         return false to discard the pixel
 template <typename Shader>
 void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles,
@@ -91,7 +90,7 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
     using simd::Int4;
 
     const int varyingCount = shader.varyingCount();
-    const bool wantsEdgeDistance = shader.wantsEdgeDistance();
+    const float slopeBias = shader.depthSlopeBias();
 
     for (std::size_t t = 0; t < count; ++t) {
         const RasterTriangle& tri = *triangles[t];
@@ -152,9 +151,25 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
         // screen space *without* perspective correction, because projection
         // maps planes to planes: a flat triangle in 3D is still flat in
         // (screen x, screen y, z/w) space.
-        const Float4 z0 = Float4::splat(tri.z[0]);
-        const Float4 dz1 = Float4::splat((tri.z[1] - tri.z[0]) * invArea);
-        const Float4 dz2 = Float4::splat((tri.z[2] - tri.z[0]) * invArea);
+        const float dz1Scalar = (tri.z[1] - tri.z[0]) * invArea;
+        const float dz2Scalar = (tri.z[2] - tri.z[0]) * invArea;
+
+        // Polygon offset. When lines are drawn on top of filled triangles
+        // (wireframe), a line pixel and the surface under it are sampled at
+        // slightly different points, so on a sloped surface the line would
+        // lose the depth test at random. Pushing the surface back by how
+        // much its depth changes across a pixel or so makes the line win
+        // reliably while lines on genuinely hidden surfaces still lose.
+        float offset = 0.0f;
+        if (slopeBias > 0.0f) {
+            const float dzdx = std::abs(dz1Scalar * static_cast<float>(stepX[1]) + dz2Scalar * static_cast<float>(stepX[2]));
+            const float dzdy = std::abs(dz1Scalar * static_cast<float>(stepY[1]) + dz2Scalar * static_cast<float>(stepY[2]));
+            offset = slopeBias * (dzdx + dzdy) + 1e-5f;
+        }
+
+        const Float4 z0 = Float4::splat(tri.z[0] + offset);
+        const Float4 dz1 = Float4::splat(dz1Scalar);
+        const Float4 dz2 = Float4::splat(dz2Scalar);
 
         // Lane offsets: the four pixels of a SIMD group sit 0, 1, 2 and 3
         // steps to the right of the group's first pixel.
@@ -250,17 +265,6 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
                         frag.varyings[k] = b0 * tri.varyings[0][k] + b1 * tri.varyings[1][k] +
                                            b2 * tri.varyings[2][k];
 
-                    frag.edgeDistance[0] = frag.edgeDistance[1] = frag.edgeDistance[2] = 0.0f;
-                    if (wantsEdgeDistance) {
-                        // An edge function divided by its edge's length is
-                        // the perpendicular distance from that edge - used to
-                        // draw wireframe lines of constant width.
-                        const float area_f = static_cast<float>(area);
-                        frag.edgeDistance[0] = (area_f - edge1[lane] - edge2[lane]) * tri.edgeScale[0];
-                        frag.edgeDistance[1] = edge1[lane] * tri.edgeScale[1];
-                        frag.edgeDistance[2] = edge2[lane] * tri.edgeScale[2];
-                    }
-
                     Color8 color;
                     if (!shader(tri, frag, color)) continue;  // discarded (alpha cut-out)
                     depthRow[x + lane] = depth[lane];
@@ -271,6 +275,85 @@ void rasterizeTile(Framebuffer& fb, const TileRect& tile, const RasterTriangle* 
             rowStart[0] += stepY[0];
             rowStart[1] += stepY[1];
             rowStart[2] += stepY[2];
+        }
+    }
+}
+
+// Draw the edges of `count` triangles as lines, restricted to `tile`.
+//
+// This runs after rasterizeTile has filled the tile's depth buffer (with a
+// depthSlopeBias), so lines on hidden surfaces fail the depth test: hidden
+// line removal for free. Only edges flagged in RasterTriangle::edgeMask are
+// drawn, which leaves out the diagonals introduced by clipping.
+//
+// Shader requirement, in addition to those of rasterizeTile:
+//     bool shadeEdge(const RasterTriangle&, const Fragment&, Color8& out) const;
+template <typename Shader>
+void rasterizeTileEdges(Framebuffer& fb, const TileRect& tile, const RasterTriangle* const* triangles,
+                        std::size_t count, const Shader& shader, int lineWidth) {
+    const int varyingCount = shader.varyingCount();
+    const float toPixels = 1.0f / static_cast<float>(kSubpixelScale);
+    // A line of width w covers offsets [-(w-1)/2, w/2] across its direction.
+    const int offsetLo = -(lineWidth - 1) / 2, offsetHi = lineWidth / 2;
+
+    for (std::size_t t = 0; t < count; ++t) {
+        const RasterTriangle& tri = *triangles[t];
+        for (int edge = 0; edge < 3; ++edge) {
+            if (!(tri.edgeMask & (1 << edge))) continue;
+            int a = (edge + 1) % 3, b = (edge + 2) % 3;
+
+            // The line is stepped along its major axis - the one it covers
+            // more distance in - visiting each pixel column (or row) once.
+            const bool steep = std::abs(tri.y[b] - tri.y[a]) > std::abs(tri.x[b] - tri.x[a]);
+            const std::int32_t* major = steep ? tri.y : tri.x;
+            const std::int32_t* minor = steep ? tri.x : tri.y;
+            // Always walk in the same direction, so that the two triangles
+            // sharing this edge pick exactly the same pixels.
+            if (major[a] > major[b] || (major[a] == major[b] && minor[a] > minor[b])) std::swap(a, b);
+            if (major[a] == major[b]) continue;  // shorter than a subpixel
+
+            const float majorA = static_cast<float>(major[a]) * toPixels;
+            const float majorB = static_cast<float>(major[b]) * toPixels;
+            const float minorA = static_cast<float>(minor[a]) * toPixels;
+            const float minorB = static_cast<float>(minor[b]) * toPixels;
+            const float invLength = 1.0f / (majorB - majorA);
+
+            // Pixels whose centre (index + 0.5) lies within the line's span,
+            // clipped to the tile.
+            const int tileLo = steep ? tile.y0 : tile.x0, tileHi = (steep ? tile.y1 : tile.x1) - 1;
+            const int first = std::max(static_cast<int>(std::ceil(majorA - 0.5f)), tileLo);
+            const int last = std::min(static_cast<int>(std::floor(majorB - 0.5f)), tileHi);
+            const int minorLo = steep ? tile.x0 : tile.y0, minorHi = (steep ? tile.x1 : tile.y1) - 1;
+
+            for (int m = first; m <= last; ++m) {
+                const float s = (static_cast<float>(m) + 0.5f - majorA) * invLength;  // 0 at a, 1 at b
+                const int centre = static_cast<int>(std::floor(minorA + s * (minorB - minorA)));
+                const float z = tri.z[a] + s * (tri.z[b] - tri.z[a]);
+
+                bool shaded = false;
+                Color8 color;
+                for (int offset = offsetLo; offset <= offsetHi; ++offset) {
+                    const int n = centre + offset;
+                    if (n < minorLo || n > minorHi) continue;
+                    const int x = steep ? n : m, y = steep ? m : n;
+                    float& depth = fb.depthRow(y)[x];
+                    if (!(z < depth)) continue;
+
+                    if (!shaded) {
+                        // Perspective-correct interpolation again, this time
+                        // along a line: the same formula with two weights.
+                        const float qa = (1.0f - s) * tri.invW[a], qb = s * tri.invW[b];
+                        const float wb = qb / (qa + qb), wa = 1.0f - wb;
+                        Fragment frag;
+                        for (int k = 0; k < varyingCount; ++k)
+                            frag.varyings[k] = wa * tri.varyings[a][k] + wb * tri.varyings[b][k];
+                        if (!shader.shadeEdge(tri, frag, color)) break;
+                        shaded = true;
+                    }
+                    depth = z;
+                    fb.colorRow(y)[x] = color;
+                }
+            }
         }
     }
 }

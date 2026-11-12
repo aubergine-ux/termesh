@@ -39,7 +39,7 @@ struct TestShader {
     Color8 color{255, 255, 255, 255};
 
     int varyingCount() const { return 1; }
-    bool wantsEdgeDistance() const { return false; }
+    float depthSlopeBias() const { return 0.0f; }
     bool operator()(const RasterTriangle&, const Fragment& frag, Color8& out) const {
         out = color;
         out.g = static_cast<std::uint8_t>(std::clamp(frag.varyings[0], 0.0f, 1.0f) * 255.0f + 0.5f);
