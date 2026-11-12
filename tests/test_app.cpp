@@ -1,9 +1,12 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
+
 #include <initializer_list>
 #include <vector>
 
 #include "app/capabilities.hpp"
+#include "app/benchmark.hpp"
 #include "app/options.hpp"
 #include "export/offscreen.hpp"
 #include "scene/primitives.hpp"
@@ -264,4 +267,83 @@ TEST_CASE("options: lighting and effects") {
     CHECK_FALSE(parse({"m.glb", "--dither", "sparkly"}).ok);
     CHECK_FALSE(parse({"m.glb", "--env"}).ok);
     CHECK_FALSE(parse({"m.glb", "--env-intensity", "-1"}).ok);
+}
+
+TEST_CASE("options: level of detail and the target frame rate") {
+    // Unset means "the default for the mode": on in the viewer, off for exports.
+    CHECK_FALSE(parse({"m.glb"}).options.lodTolerance.has_value());
+    CHECK(parse({"m.glb"}).options.targetFps == 30);
+
+    const ParseResult r = parse({"m.glb", "--lod", "1.5", "--target-fps", "45"});
+    REQUIRE(r.ok);
+    CHECK(*r.options.lodTolerance == doctest::Approx(1.5f));
+    CHECK(r.options.targetFps == 45);
+    CHECK(*parse({"m.glb", "--lod", "off"}).options.lodTolerance == 0.0f);
+    CHECK(*parse({"m.glb", "--lod=0"}).options.lodTolerance == 0.0f);
+    CHECK(parse({"m.glb", "--target-fps", "0"}).options.targetFps == 0);
+
+    CHECK_FALSE(parse({"m.glb", "--lod", "-1"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--lod", "lots"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--lod"}).ok);
+    CHECK_FALSE(parse({"m.glb", "--target-fps", "-5"}).ok);
+}
+
+TEST_CASE("benchmark: the suite does the same work every time") {
+    const std::vector<std::string> names = benchmarkSceneNames();
+    REQUIRE(names.size() >= 10);
+    ThreadPool one(1), many(5);
+    BenchmarkResult result;
+    CHECK_FALSE(runBenchmarkScene("no-such-scene", 2, one, result));
+
+    std::vector<BenchmarkResult> results;
+    for (const std::string& name : names) {
+        BenchmarkResult a, b;
+        REQUIRE(runBenchmarkScene(name, 2, one, a));
+        REQUIRE(runBenchmarkScene(name, 2, many, b));
+        CAPTURE(name);
+        CHECK(a.name == name);
+        CHECK_FALSE(a.description.empty());
+        CHECK(a.frames == 2);
+        // Something was drawn...
+        CHECK(a.triangles > 0);
+        CHECK(a.pixels > 0);
+        CHECK(a.minMs <= a.medianMs);
+        // ...and exactly the same thing whatever the thread count.
+        CHECK(a.triangles == b.triangles);
+        CHECK(a.pixels == b.pixels);
+        CHECK(a.bytes == b.bytes);
+        CHECK(a.checksum == b.checksum);
+        // The scenes that encode for a terminal say how much they wrote.
+        CHECK((a.bytes > 0) == (name.rfind("present-", 0) == 0));
+        results.push_back(a);
+    }
+    // Different scenes are different work.
+    CHECK(results[0].checksum != results[1].checksum);
+
+    // A frame count below one still runs one frame.
+    REQUIRE(runBenchmarkScene(names[0], 0, one, result));
+    CHECK(result.frames == 1);
+
+    // Every scene appears in both reports.
+    const std::string table = benchmarkTable(results), json = benchmarkJson(results, 1);
+    for (const std::string& name : names) {
+        CHECK(table.find(name) != std::string::npos);
+        CHECK(json.find("\"name\": \"" + name + "\"") != std::string::npos);
+    }
+    CHECK(json.find("\"threads\": 1") != std::string::npos);
+    CHECK(std::count(json.begin(), json.end(), '{') == std::count(json.begin(), json.end(), '}'));
+}
+
+TEST_CASE("options: the benchmark suite needs no model") {
+    CHECK(parse({"--benchmark"}).ok);
+    CHECK(parse({"--benchmark"}).options.benchmark);
+    CHECK(parse({"--benchmark-list"}).options.benchmarkList);
+    const ParseResult r = parse({"--benchmark-scene", "knot-phong", "--benchmark-json", "out.json", "--frames", "8"});
+    REQUIRE(r.ok);
+    CHECK(r.options.benchmark);
+    CHECK(r.options.benchmarkScene == "knot-phong");
+    CHECK(r.options.benchmarkJsonPath == "out.json");
+    CHECK(r.options.frames == 8);
+    CHECK_FALSE(parse({"--benchmark-scene"}).ok);
+    CHECK_FALSE(parse({"--benchmark-json", ""}).ok);
 }

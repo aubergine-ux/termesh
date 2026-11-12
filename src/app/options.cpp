@@ -37,6 +37,11 @@ std::string usageText() {
                        "      --ssaa <n>         supersampling factor, 1-4 (default: depends on backend)\n"
                        "      --threads <n>      worker threads (default: all cores)\n"
                        "      --fps <n>          frame rate limit (default: 60)\n"
+                       "      --target-fps <n>   lower detail and resolution to hold this rate when moving;\n"
+                       "                         0 never does (default: 30)\n"
+                       "      --lod <px>         level of detail: allow this much error, in pixels; 'off' or 0\n"
+                       "                         always draws the full mesh (default: 0.5 in the viewer, off\n"
+                       "                         for exports)\n"
                        "      --no-stats         hide the status bar\n"
                        "\n"
                        "Lighting and effects:\n"
@@ -82,6 +87,13 @@ std::string usageText() {
                        "      --gif-fps <n>      GIF playback rate (default: 24)\n"
                        "      --blocks <n>       draw each pixel as an n x n block, like terminal cells\n"
                        "      --bench <n>        render n frames off-screen and print timings\n"
+                       "\n"
+                       "Benchmark suite (no model needed):\n"
+                       "      --benchmark        run the built-in scenes and print reproducible counters and timings\n"
+                       "      --benchmark-scene <name>   run only one scene\n"
+                       "      --benchmark-list   print the scene names\n"
+                       "      --benchmark-json <file>    also write the results as JSON\n"
+                       "      --frames <n>       frames per scene (default: 24)\n"
                        "\n"
                        "      --demo <name>      built-in model: ") +
            demos +
@@ -278,6 +290,8 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         else if (name == "--list-animations") o.listAnimations = true;
         else if (name == "--no-spin") o.spin = false;
         else if (name == "--print") o.print = true;
+        else if (name == "--benchmark") o.benchmark = true;
+        else if (name == "--benchmark-list") o.benchmarkList = true;
         else if (name == "--demo") {
             if (!needValue()) return missing();
             o.demo = std::string(value);
@@ -315,6 +329,15 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--threads") {
             if (!needValue()) return missing();
             if (!intOption(o.threads, 1, 256)) return invalid();
+        } else if (name == "--lod") {
+            if (!needValue()) return missing();
+            float v = 0.0f;
+            if (value == "off") o.lodTolerance = 0.0f;
+            else if (parseFloat(value, v) && v >= 0.0f && v <= 64.0f) o.lodTolerance = v;
+            else return invalid();
+        } else if (name == "--target-fps") {
+            if (!needValue()) return missing();
+            if (!intOption(o.targetFps, 0, 1000)) return invalid();
         } else if (name == "--fps") {
             if (!needValue()) return missing();
             if (!intOption(o.fpsLimit, 1, 1000)) return invalid();
@@ -410,6 +433,16 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         } else if (name == "--blocks") {
             if (!needValue()) return missing();
             if (!intOption(o.blocks, 1, 64)) return invalid();
+        } else if (name == "--benchmark-scene") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.benchmarkScene = std::string(value);
+            o.benchmark = true;
+        } else if (name == "--benchmark-json") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.benchmarkJsonPath = std::string(value);
+            o.benchmark = true;
         } else if (name == "--bench") {
             if (!needValue()) return missing();
             if (!intOption(o.benchFrames, 1, 1000000)) return invalid();
@@ -418,7 +451,7 @@ ParseResult parseOptions(int argc, const char* const* argv) {
         }
     }
 
-    if (o.showHelp || o.showVersion) return result;
+    if (o.showHelp || o.showVersion || o.benchmark || o.benchmarkList) return result;
     if (o.modelPath.empty() && o.demo.empty()) return fail("no model given");
     if (!o.modelPath.empty() && !o.demo.empty()) return fail("give either a model file or --demo, not both");
     return result;

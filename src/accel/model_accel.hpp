@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "accel/bvh.hpp"
+#include "accel/simplify.hpp"
 #include "core/thread_pool.hpp"
 #include "scene/camera.hpp"
 #include "scene/draw_item.hpp"
@@ -30,6 +31,16 @@ public:
     // Rebuild any trees that refresh() left out of date.
     void updateTrees(const Model& model, ThreadPool* pool = nullptr);
 
+    // Build levels of detail for the larger meshes (see simplify.hpp).
+    // Unlike the trees these survive animation: a level is a list of
+    // triangles, and stays valid wherever the vertices go.
+    void buildLods(const Model& model, ThreadPool* pool = nullptr);
+    // Install levels built elsewhere (one list per mesh), for example on a
+    // background thread.
+    void setLods(std::vector<std::vector<MeshLod>> lods);
+    // The coarser versions of a mesh, finest first; empty if it has none.
+    const std::vector<MeshLod>& lods(std::size_t mesh) const { return entries_[mesh].lods; }
+
     std::size_t meshCount() const { return entries_.size(); }
     const Bounds& bounds(std::size_t mesh) const { return entries_[mesh].bounds; }
     // The mesh's tree, or null while it is out of date.
@@ -40,6 +51,7 @@ private:
         Bounds bounds;
         Bvh bvh;
         bool stale = true;
+        std::vector<MeshLod> lods;
     };
     std::vector<Entry> entries_;
 };

@@ -55,9 +55,11 @@ endif()
 add_library(termesh_core STATIC
     src/accel/bvh.cpp
     src/accel/model_accel.cpp
+    src/accel/simplify.cpp
     src/anim/player.cpp
     src/anim/pose.cpp
     src/anim/skinning.cpp
+    src/app/benchmark.cpp
     src/app/capabilities.cpp
     src/app/options.cpp
     src/app/viewer.cpp
@@ -117,6 +119,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_app.cpp
         tests/test_clip.cpp
         tests/test_input.cpp
+        tests/test_lod.cpp
         tests/test_math.cpp
         tests/test_output.cpp
         tests/test_post.cpp

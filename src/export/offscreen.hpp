@@ -1,6 +1,7 @@
 // Off-screen rendering to images, for PNG screenshots and GIF recording.
 #pragma once
 
+#include <span>
 #include <string>
 
 #include "core/image.hpp"
@@ -21,6 +22,12 @@ struct OffscreenTarget {
 // (rounded down to a multiple of target.blocks). Background pixels come out
 // opaque.
 Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, const OrbitCamera& camera,
+                      RenderSettings settings, const OffscreenTarget& target, RenderStats* stats = nullptr);
+
+// The same for a draw list. Settings measured in pixels (line width, level
+// of detail tolerance) are given in output pixels and scaled to the
+// supersampled framebuffer here.
+Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const OrbitCamera& camera,
                       RenderSettings settings, const OffscreenTarget& target, RenderStats* stats = nullptr);
 
 bool writePng(const std::string& path, const Image& image);

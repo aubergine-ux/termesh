@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "app/benchmark.hpp"
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
 #include "anim/player.hpp"
@@ -33,6 +34,14 @@ RenderSettings renderSettings(const Options& options, const Environment& environ
     return settings;
 }
 
+// Level of detail for the non-interactive modes: off unless asked for.
+// Returns the tolerance in output pixels, having built the levels if needed.
+float prepareLods(const Options& options, const Model& model, ModelAccel& accel, ThreadPool& pool) {
+    const float tolerance = options.lodTolerance.value_or(0.0f);
+    if (tolerance > 0.0f) accel.buildLods(model, &pool);
+    return tolerance;
+}
+
 // --png: one frame to an image file.
 int runPng(const Options& options, const Model& model, const Environment& environment, ThreadPool& pool) {
     Renderer renderer(pool);
@@ -44,8 +53,12 @@ int runPng(const Options& options, const Model& model, const Environment& enviro
     target.supersampling = options.supersampling > 0 ? options.supersampling : 2;
     target.blocks = options.blocks;
 
-    const RenderSettings settings = renderSettings(options, environment);
-    const Image image = renderOffscreen(renderer, pool, model, makeCamera(options, model), settings, target);
+    RenderSettings settings = renderSettings(options, environment);
+    ModelAccel accel(model, &pool);
+    settings.lodTolerance = prepareLods(options, model, accel, pool);
+    const DrawItem item{&model, Mat4::identity(), &accel};
+    const Image image = renderOffscreen(renderer, pool, std::span<const DrawItem>(&item, 1), makeCamera(options, model),
+                                        settings, target);
     if (!writePng(options.pngPath, image)) {
         std::fprintf(stderr, "termesh: could not write '%s'\n", options.pngPath.c_str());
         return 1;
@@ -66,7 +79,10 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, const 
     target.supersampling = options.supersampling > 0 ? options.supersampling : 3;
     target.blocks = options.blocks;
 
-    const RenderSettings settings = renderSettings(options, environment);
+    RenderSettings settings = renderSettings(options, environment);
+    ModelAccel accel(model, &pool);
+    settings.lodTolerance = prepareLods(options, model, accel, pool);
+    const DrawItem item{&model, Mat4::identity(), &accel};
     OrbitCamera camera = makeCamera(options, model);
     const float startYaw = camera.yaw;
     // Spin the same way as the interactive viewer; a negative speed reverses.
@@ -96,8 +112,10 @@ int runGif(const Options& options, Model& model, AnimationPlayer* player, const 
         if (player) {
             player->seek(startTime + player->speed() * static_cast<float>(i) / static_cast<float>(options.gifFps));
             applyPose(model, player->pose(), &pool);
+            accel.refresh(model);
         }
-        frames.push_back(renderOffscreen(renderer, pool, model, camera, settings, target));
+        frames.push_back(
+            renderOffscreen(renderer, pool, std::span<const DrawItem>(&item, 1), camera, settings, target));
         if (progress) std::fprintf(stderr, "\rrendering frame %d/%d", i + 1, frameCount);
     }
 
@@ -160,7 +178,10 @@ int runPrint(const Options& options, const Model& model, const Environment& envi
     Renderer renderer(pool);
     Framebuffer fb(width * ssaa, height * ssaa);
     const float aspect = static_cast<float>(width) * backend->pixelAspect() / static_cast<float>(height);
-    renderer.render(model, makeCamera(options, model).camera(aspect), settings, fb);
+    ModelAccel accel(model, &pool);
+    settings.lodTolerance = prepareLods(options, model, accel, pool) * static_cast<float>(ssaa);
+    const DrawItem item{&model, Mat4::identity(), &accel};
+    renderer.render(std::span<const DrawItem>(&item, 1), makeCamera(options, model).camera(aspect), settings, fb);
     Image image;
     resolve(fb, ssaa, image, pool);
     if (settings.post.fxaa) applyFxaa(image, pool);
@@ -190,6 +211,13 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
 
     // The same boxes and BVHs the viewer uses, so the numbers match it.
     ModelAccel accel(model, &pool);
+    if (options.lodTolerance.value_or(0.0f) > 0.0f) {
+        const auto lodStart = std::chrono::steady_clock::now();
+        accel.buildLods(model, &pool);
+        std::printf("lod          built in %.1f ms\n",
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lodStart).count());
+        settings.lodTolerance = *options.lodTolerance * static_cast<float>(ssaa);
+    }
     const DrawItem item{&model, Mat4::identity(), &accel};
 
     RenderStats total;
@@ -215,6 +243,7 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
         total.postMs += s.postMs;
         total.trianglesDrawn += s.trianglesDrawn;
         total.trianglesCulled += s.trianglesCulled;
+        total.trianglesSimplified += s.trianglesSimplified;
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     const double n = options.benchFrames;
@@ -229,6 +258,9 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     std::printf("per frame    vertex %.2f ms, setup %.2f ms, raster %.2f ms, %.0f triangles drawn\n",
                 total.vertexMs / n, total.setupMs / n, total.rasterMs / n,
                 static_cast<double>(total.trianglesDrawn) / n);
+    if (total.trianglesSimplified > 0)
+        std::printf("lod          %.0f triangles per frame saved by coarser levels of detail\n",
+                    static_cast<double>(total.trianglesSimplified) / n);
     if (total.trianglesCulled > 0)
         std::printf("culling      %.0f triangles per frame skipped before the vertex stage\n",
                     static_cast<double>(total.trianglesCulled) / n);
@@ -238,6 +270,37 @@ int runBench(const Options& options, Model& model, AnimationPlayer* player, cons
     if (player)
         std::printf("animation    %s: pose + skinning %.2f ms per frame\n", player->clipName(player->clip()).c_str(),
                     poseMs / n);
+    return 0;
+}
+
+// --benchmark: the built-in suite.
+int runBenchmark(const Options& options) {
+    ThreadPool pool(static_cast<unsigned>(options.threads));
+    const int frames = options.frames > 0 ? options.frames : 24;
+    std::vector<std::string> names = benchmarkSceneNames();
+    if (!options.benchmarkScene.empty()) names = {options.benchmarkScene};
+
+    std::vector<BenchmarkResult> results;
+    for (const std::string& name : names) {
+        BenchmarkResult result;
+        if (!runBenchmarkScene(name, frames, pool, result)) {
+            std::fprintf(stderr, "termesh: no benchmark scene '%s' (try --benchmark-list)\n", name.c_str());
+            return 2;
+        }
+        results.push_back(std::move(result));
+    }
+    std::printf("termesh %s benchmark: %u threads, %s\n\n%s", TERMESH_VERSION, pool.threadCount(), simd::kName,
+                benchmarkTable(results).c_str());
+    if (!options.benchmarkJsonPath.empty()) {
+        std::FILE* file = std::fopen(options.benchmarkJsonPath.c_str(), "wb");
+        const std::string json = benchmarkJson(results, pool.threadCount());
+        const bool ok = file && std::fwrite(json.data(), 1, json.size(), file) == json.size();
+        if (file) std::fclose(file);
+        if (!ok) {
+            std::fprintf(stderr, "termesh: could not write '%s'\n", options.benchmarkJsonPath.c_str());
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -258,6 +321,12 @@ int main(int argc, char** argv) {
         std::printf("termesh %s\n", TERMESH_VERSION);
         return 0;
     }
+
+    if (options.benchmarkList) {
+        for (const std::string& name : benchmarkSceneNames()) std::printf("%s\n", name.c_str());
+        return 0;
+    }
+    if (options.benchmark) return runBenchmark(options);
 
     Model model;
     if (!options.demo.empty()) {

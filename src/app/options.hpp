@@ -30,6 +30,12 @@ struct Options {
     Color8 background{16, 17, 22, 255};
     int supersampling = 0;  // 0 = backend default
     int threads = 0;        // 0 = all hardware threads
+    // Level of detail: the error allowed, in output pixels. 0 = off. Unset =
+    // the default for the mode: on in the viewer, off for exports.
+    std::optional<float> lodTolerance;
+    // The viewer lowers detail and resolution to hold this frame rate while
+    // something is moving. 0 = never.
+    int targetFps = 30;
 
     // Lighting.
     float lightAngle = 0.0f;  // turn of the key light about the vertical axis, degrees
@@ -77,6 +83,12 @@ struct Options {
     int gifFps = 24;
     int blocks = 1;       // draw each pixel as an NxN block ("terminal look")
     int benchFrames = 0;  // render N frames off-screen and report timings
+
+    // The built-in benchmark suite (app/benchmark.hpp).
+    bool benchmark = false;
+    bool benchmarkList = false;     // print the scene names and exit
+    std::string benchmarkScene;     // run only this scene
+    std::string benchmarkJsonPath;  // also write the results here as JSON
 
     bool showHelp = false, showVersion = false;
 };

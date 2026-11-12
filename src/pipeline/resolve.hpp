@@ -18,4 +18,9 @@ namespace termesh {
 // flag) is averaged too, giving the fraction of the pixel covered by geometry.
 void resolve(const Framebuffer& src, int factor, Image& dst, ThreadPool& pool);
 
+// Stretch `src` to width x height with bilinear filtering, writing into
+// `dst`. Used when a frame was rendered below the display resolution to
+// save time; smooth enlargement hides that better than blocky pixels.
+void upscale(const Image& src, int width, int height, Image& dst, ThreadPool& pool);
+
 }  // namespace termesh

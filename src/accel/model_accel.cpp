@@ -18,6 +18,22 @@ void ModelAccel::build(const Model& model, ThreadPool* pool) {
     updateTrees(model, pool);
 }
 
+void ModelAccel::buildLods(const Model& model, ThreadPool* pool) {
+    if (entries_.size() != model.meshes.size()) entries_.assign(model.meshes.size(), {});
+    auto buildOne = [&](int i) {
+        entries_[static_cast<std::size_t>(i)].lods = termesh::buildLods(model.meshes[static_cast<std::size_t>(i)]);
+    };
+    const int count = static_cast<int>(entries_.size());
+    if (pool && count > 1) pool->parallelFor(count, buildOne);
+    else
+        for (int i = 0; i < count; ++i) buildOne(i);
+}
+
+void ModelAccel::setLods(std::vector<std::vector<MeshLod>> lods) {
+    if (lods.size() != entries_.size()) return;  // built for some other model
+    for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].lods = std::move(lods[i]);
+}
+
 void ModelAccel::refresh(const Model& model) {
     if (entries_.size() != model.meshes.size()) entries_.assign(model.meshes.size(), {});
     for (std::size_t i = 0; i < entries_.size(); ++i) {

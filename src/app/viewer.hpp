@@ -2,6 +2,7 @@
 #pragma once
 
 #include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "anim/player.hpp"
 #include "app/capabilities.hpp"
 #include "app/options.hpp"
+#include "app/quality.hpp"
 #include "core/image.hpp"
 #include "input/events.hpp"
 #include "input/terminal.hpp"
@@ -39,6 +41,7 @@ private:
     bool handleAnimationKey(char32_t ch);  // true if the key was an animation control
     bool handleEffectKey(char32_t ch);     // true if the key was a lighting / effect control
     void pickAt(int col, int row);         // select the mesh under a cell
+    void applyQuality(int level);          // size the framebuffer for a quality level
     Camera currentCamera() const;
     RenderSettings frameSettings() const;  // settings_ plus everything decided per frame
 
@@ -71,9 +74,22 @@ private:
     BackendKind baseBackend_ = BackendKind::HalfBlock;  // what the user selected
     std::vector<BackendKind> available_;                // for cycling with 'b'
     DrawArea area_;
-    int imageWidth_ = 0, imageHeight_ = 0, supersampling_ = 1;
+    int imageWidth_ = 0, imageHeight_ = 0;    // what the backend wants
+    int baseSupersampling_ = 1;               // at full quality
+    int supersampling_ = 1;                   // for the frame in hand
+    int renderWidth_ = 0, renderHeight_ = 0;  // what is rendered: smaller than the image when degraded
     Framebuffer framebuffer_;
-    Image resolved_;
+    Image resolved_, scaled_;
+
+    // Adaptive quality: while something is moving, detail and resolution
+    // are traded for frame rate (see quality.hpp).
+    QualityGovernor governor_;
+    int appliedQuality_ = 0;  // the level the framebuffer is sized for
+    bool moving_ = false;
+    float lodTolerance_ = 0.0f;  // output pixels; 0 = no level of detail
+    // Levels of detail for a large static model are built off to the side
+    // so the first frame does not wait for them.
+    std::future<std::vector<std::vector<MeshLod>>> pendingLods_;
 
     OrbitCamera camera_;
     RenderSettings settings_;

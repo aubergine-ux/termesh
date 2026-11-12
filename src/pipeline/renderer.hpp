@@ -67,6 +67,11 @@ struct RenderSettings {
     // measured in output pixels (outline width, bloom reach) can scale.
     float pixelScale = 1.0f;
 
+    // Level of detail. A mesh that has coarser versions (ModelAccel::lods)
+    // is drawn with the coarsest one whose error, projected to the screen,
+    // is at most this many framebuffer pixels. 0 always draws the original.
+    float lodTolerance = 0.0f;
+
     // Draw one mesh tinted, to show it is selected: its position in the
     // draw list and in its model. -1 for none.
     int highlightItem = -1, highlightMesh = -1;
@@ -78,6 +83,8 @@ struct RenderStats {
     // Skipped before the vertex stage because their box, or their BVH node,
     // was outside the view (only for items that come with a ModelAccel).
     std::size_t meshesCulled = 0, trianglesCulled = 0;
+    // Triangles saved by drawing coarser levels of detail.
+    std::size_t trianglesSimplified = 0;
     double vertexMs = 0.0, setupMs = 0.0, rasterMs = 0.0;
     double shadowMs = 0.0, postMs = 0.0;
 
@@ -131,7 +138,7 @@ private:
                    const FinishTile& finishTile);
 
     void renderShadowMap(std::span<const DrawItem> items, const Light& light, Vec3 center, float radius,
-                         const RenderSettings& settings, ShadowMap& map, RenderStats& stats);
+                         const RenderSettings& settings, const std::uint8_t* lodChoice, ShadowMap& map);
 
     ThreadPool& pool_;
     PostProcessor post_;
@@ -148,7 +155,8 @@ private:
     std::vector<std::vector<RasterTriangle>> chunks_;
     std::vector<char> chunkBlends_;  // per chunk: holds translucent triangles
     std::vector<const RasterTriangle*> blendOrder_;
-    std::vector<std::uint64_t> visible_;  // one bit per triangle of the mesh being set up
+    std::vector<std::uint64_t> visible_;   // one bit per triangle of the mesh being set up
+    std::vector<std::uint8_t> lodChoice_;  // per mesh of the draw list: 0 = original, k = lods[k - 1]
     std::vector<std::vector<const RasterTriangle*>> bins_;
     int binsX_ = 0, binsY_ = 0;
 };

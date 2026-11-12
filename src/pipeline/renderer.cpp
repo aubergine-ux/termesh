@@ -29,6 +29,7 @@ struct Renderer::GeometryPass {
     VaryingLayout layout = VaryingLayout::PerPixel;
     bool flat = false;  // Lit only: light once per face rather than per vertex
     int highlightItem = -1, highlightMesh = -1;
+    const std::uint8_t* lodChoice = nullptr;  // per mesh of the draw list, or null for "all original"
     bool cullBackfaces = true;
     // Draw translucent materials last, back to front, without depth writes.
     bool sortTranslucent = false;
@@ -381,6 +382,7 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
 
     std::size_t chunkCount = 0;
     std::uint32_t materialBase = 0;
+    std::size_t meshOrdinal = 0;  // counts meshes across the whole draw list
 
     for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
         const DrawItem& item = items[itemIndex];
@@ -404,11 +406,19 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
         const bool haveAccel = item.accel && item.accel->meshCount() == model.meshes.size();
         const Frustum frustum = haveAccel ? Frustum::fromMatrix(modelViewProjection) : Frustum{};
 
-        for (std::size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex) {
+        for (std::size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex, ++meshOrdinal) {
             const Mesh& mesh = model.meshes[meshIndex];
-            const std::size_t triangleCount = mesh.indices.size() / 3;
-            if (triangleCount == 0) continue;
-            stats.trianglesSubmitted += triangleCount;
+            if (mesh.indices.size() < 3) continue;
+            stats.trianglesSubmitted += mesh.indices.size() / 3;
+
+            // Level of detail: a coarser version of the mesh is just another
+            // index list over the same vertices.
+            const MeshLod* lod = nullptr;
+            if (pass.lodChoice && pass.lodChoice[meshOrdinal] > 0)
+                lod = &item.accel->lods(meshIndex)[pass.lodChoice[meshOrdinal] - 1u];
+            const std::vector<std::uint32_t>& indices = lod ? lod->indices : mesh.indices;
+            const std::size_t triangleCount = indices.size() / 3;
+            if (lod) stats.trianglesSimplified += mesh.indices.size() / 3 - triangleCount;
 
             // ------------------------------------------------------- culling
             // A mesh whose box is entirely outside the view is skipped
@@ -425,8 +435,10 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
                     stats.trianglesCulled += triangleCount;
                     continue;
                 }
+                // (The BVH indexes the original triangles, so it cannot
+                // help with a simplified version - which is small anyway.)
                 const Bvh* bvh = item.accel->bvh(meshIndex);
-                if (side == Frustum::Side::Intersecting && bvh && triangleCount >= kMinTrianglesForBvhCulling) {
+                if (side == Frustum::Side::Intersecting && bvh && !lod && triangleCount >= kMinTrianglesForBvhCulling) {
                     visible_.assign((triangleCount + 63) / 64, 0);
                     bvh->markVisible(frustum, visible_);
                     std::size_t kept = 0;
@@ -444,12 +456,15 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
             // triangles share it.
             auto t0 = std::chrono::steady_clock::now();
             clipVertices_.resize(mesh.vertices.size());
-            const int vertexChunks =
-                static_cast<int>((mesh.vertices.size() + kVerticesPerChunk - 1) / kVerticesPerChunk);
+            // A simplified mesh uses only some of the vertices; transform
+            // just those.
+            const std::size_t vertexCount = lod ? lod->vertices.size() : mesh.vertices.size();
+            const int vertexChunks = static_cast<int>((vertexCount + kVerticesPerChunk - 1) / kVerticesPerChunk);
             pool_.parallelFor(vertexChunks, [&](int chunk) {
                 const std::size_t begin = static_cast<std::size_t>(chunk) * kVerticesPerChunk;
-                const std::size_t end = std::min(begin + kVerticesPerChunk, mesh.vertices.size());
-                for (std::size_t i = begin; i < end; ++i) {
+                const std::size_t end = std::min(begin + kVerticesPerChunk, vertexCount);
+                for (std::size_t slot = begin; slot < end; ++slot) {
+                    const std::size_t i = lod ? lod->vertices[slot] : slot;
                     const Vertex& in = mesh.vertices[i];
                     ClipVertex& out = clipVertices_[i];
                     out.position = modelViewProjection * Vec4(in.position, 1.0f);
@@ -502,9 +517,9 @@ void Renderer::buildGeometry(std::span<const DrawItem> items, const GeometryPass
 
                 for (std::size_t tri = begin; tri < end; ++tri) {
                     if (useVisibility && !((visible_[tri >> 6] >> (tri & 63)) & 1)) continue;
-                    const std::uint32_t i0 = mesh.indices[tri * 3];
-                    const std::uint32_t i1 = mesh.indices[tri * 3 + 1];
-                    const std::uint32_t i2 = mesh.indices[tri * 3 + 2];
+                    const std::uint32_t i0 = indices[tri * 3];
+                    const std::uint32_t i1 = indices[tri * 3 + 1];
+                    const std::uint32_t i2 = indices[tri * 3 + 2];
 
                     // Trivial rejection: all three vertices outside one plane.
                     const unsigned c0 = clipOutcode(clipVertices_[i0].position);
@@ -638,7 +653,7 @@ void Renderer::rasterize(Target& target, const Shader& shader, typename Target::
 }
 
 void Renderer::renderShadowMap(std::span<const DrawItem> items, const Light& light, Vec3 center, float radius,
-                               const RenderSettings& settings, ShadowMap& map, RenderStats& stats) {
+                               const RenderSettings& settings, const std::uint8_t* lodChoice, ShadowMap& map) {
     const int size = std::clamp(settings.shadowMapSize, 64, 2048);
     map.target.resize(size, size);
     aimShadowMap(map, light, center, radius);
@@ -649,6 +664,7 @@ void Renderer::renderShadowMap(std::span<const DrawItem> items, const Light& lig
     pass.width = pass.height = size;
     pass.layout = VaryingLayout::DepthOnly;
     pass.cullBackfaces = settings.cullBackfaces;
+    pass.lodChoice = lodChoice;
 
     // The shadow pass's triangle counts and timings are reported as one
     // number, not mixed into the main view's.
@@ -656,7 +672,6 @@ void Renderer::renderShadowMap(std::span<const DrawItem> items, const Light& lig
     buildGeometry(items, pass, ignored);
     DepthShader shader{materials_.data()};
     rasterize(map.target, shader, std::uint8_t{0}, false, 1, [](const TileRect&) {});
-    (void)stats;
 }
 
 RenderStats Renderer::render(const Model& model, const Camera& camera, const RenderSettings& settings,
@@ -680,6 +695,44 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     for (const DrawItem& item : items)
         for (const Material& material : item.model->materials)
             materials_.push_back({&material, item.model->textures.data()});
+
+    // --------------------------------------------------------- level of detail
+    // Chosen once per frame and shared by every pass, so that a shadow is
+    // cast by the same triangles that receive it.
+    const std::uint8_t* lodChoice = nullptr;
+    // Wireframe is for looking at the mesh itself: always the original.
+    if (settings.lodTolerance > 0.0f && !settings.wireframe) {
+        lodChoice_.clear();
+        bool any = false;
+        // How many pixels one world unit covers at distance 1.
+        const float pixelsPerUnit = 0.5f * static_cast<float>(height) * camera.projection.c[1].y;
+        for (const DrawItem& item : items) {
+            const bool haveLods = item.accel && item.accel->meshCount() == item.model->meshes.size();
+            // A scaled model's error is scaled with it.
+            const float scale = std::max({length(item.transform.c[0].xyz()), length(item.transform.c[1].xyz()),
+                                          length(item.transform.c[2].xyz())});
+            for (std::size_t m = 0; m < item.model->meshes.size(); ++m) {
+                std::uint8_t choice = 0;
+                if (haveLods && !item.accel->lods(m).empty()) {
+                    const Bounds& box = item.accel->bounds(m);
+                    const float radius = box.radius() * scale;
+                    // Judge by the nearest part of the mesh: the part where
+                    // an error is largest on screen.
+                    const float distance =
+                        std::max(length(transformPoint(item.transform, box.center()) - camera.position) - radius,
+                                 radius * 0.05f);
+                    const std::vector<MeshLod>& lods = item.accel->lods(m);
+                    for (std::size_t k = 0; k < lods.size() && k < 255; ++k) {
+                        if (lods[k].error * scale * pixelsPerUnit / distance > settings.lodTolerance) break;
+                        choice = static_cast<std::uint8_t>(k + 1);
+                    }
+                }
+                lodChoice_.push_back(choice);
+                any = any || choice > 0;
+            }
+        }
+        if (any) lodChoice = lodChoice_.data();
+    }
 
     // ------------------------------------------------------------------ lights
     // Lighting is computed in world space; lights given relative to the
@@ -731,7 +784,7 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
         int used = 0;
         for (std::size_t i = 0; i < lights.size() && used < kMaxShadowMaps; ++i) {
             if (!lights[i].castsShadow || lights[i].type == LightType::Point) continue;
-            renderShadowMap(items, lights[i], bounds.center(), bounds.radius(), settings, shadowMaps_[used], stats);
+            renderShadowMap(items, lights[i], bounds.center(), bounds.radius(), settings, lodChoice, shadowMaps_[used]);
             shadows[i] = &shadowMaps_[used++];
         }
         if (used > 0) stats.shadowMs = msSince(t0);
@@ -758,6 +811,7 @@ RenderStats Renderer::render(std::span<const DrawItem> items, const Camera& came
     pass.lighting = &lighting;
     pass.highlightItem = settings.highlightItem;
     pass.highlightMesh = settings.highlightMesh;
+    pass.lodChoice = lodChoice;
     buildGeometry(items, pass, stats);
 
     // ------------------------------------------------------------ rasterization

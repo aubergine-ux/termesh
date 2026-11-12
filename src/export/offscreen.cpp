@@ -1,6 +1,7 @@
 #include "export/offscreen.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <stb/stb_image_write.h>
 
@@ -9,6 +10,13 @@
 namespace termesh {
 
 Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, const OrbitCamera& camera,
+                      RenderSettings settings, const OffscreenTarget& target, RenderStats* stats) {
+    const DrawItem item{&model, Mat4::identity(), nullptr};
+    return renderOffscreen(renderer, pool, std::span<const DrawItem>(&item, 1), camera, std::move(settings), target,
+                           stats);
+}
+
+Image renderOffscreen(Renderer& renderer, ThreadPool& pool, std::span<const DrawItem> items, const OrbitCamera& camera,
                       RenderSettings settings, const OffscreenTarget& target, RenderStats* stats) {
     const int blocks = std::max(target.blocks, 1);
     const int width = std::max(target.width / blocks, 1);
@@ -22,8 +30,9 @@ Image renderOffscreen(Renderer& renderer, ThreadPool& pool, const Model& model, 
     Framebuffer fb(width * ssaa, height * ssaa);
     settings.wireWidth *= static_cast<float>(ssaa);
     settings.pixelScale = static_cast<float>(ssaa);
+    settings.lodTolerance *= static_cast<float>(ssaa);
     const RenderStats s =
-        renderer.render(model, camera.camera(static_cast<float>(width) / static_cast<float>(height)), settings, fb);
+        renderer.render(items, camera.camera(static_cast<float>(width) / static_cast<float>(height)), settings, fb);
     if (stats) *stats = s;
 
     Image resolved;

@@ -90,6 +90,23 @@ Viewer::Viewer(const Options& options, Model& model, AnimationPlayer* player, co
     settings_ = makeRenderSettings(options);
     settings_.skybox = wantsSkybox(options, environment);
     accel_.build(model_, &pool_);
+
+    // Level of detail is on by default here: at terminal resolutions a
+    // detailed model has many triangles per pixel.
+    lodTolerance_ = options.lodTolerance.value_or(0.5f);
+    if (lodTolerance_ > 0.0f) {
+        if (model_.animated()) {
+            // The vertices are about to start moving; build from the rest
+            // pose now rather than race the animation.
+            accel_.buildLods(model_, &pool_);
+        } else {
+            pendingLods_ = std::async(std::launch::async, [this] {
+                std::vector<std::vector<MeshLod>> lods;
+                for (const Mesh& mesh : model_.meshes) lods.push_back(buildLods(mesh));
+                return lods;
+            });
+        }
+    }
     lightYaw_ = radians(options.lightAngle);
     dither_ = options.dither;
     outlineAuto_ = !options.outline.has_value();
@@ -159,17 +176,26 @@ void Viewer::layout() {
     area_.cellHeight = caps_.cellHeight;
     backend_->configure(area_, imageWidth_, imageHeight_);
 
-    supersampling_ = options_.supersampling > 0 ? options_.supersampling : backend_->defaultSupersampling();
-    while (supersampling_ > 1 &&
-           static_cast<std::int64_t>(imageWidth_) * supersampling_ * imageHeight_ * supersampling_ >
+    baseSupersampling_ = options_.supersampling > 0 ? options_.supersampling : backend_->defaultSupersampling();
+    while (baseSupersampling_ > 1 &&
+           static_cast<std::int64_t>(imageWidth_) * baseSupersampling_ * imageHeight_ * baseSupersampling_ >
                kMaxFramebufferPixels)
-        --supersampling_;
-    framebuffer_.resize(imageWidth_ * supersampling_, imageHeight_ * supersampling_);
+        --baseSupersampling_;
+    applyQuality(moving_ ? governor_.current() : 0);
 
     terminal_.write("\x1b[0m\x1b[2J");
     backend_->invalidate();
     lastStatus_.clear();
     dirty_ = true;
+}
+
+void Viewer::applyQuality(int level) {
+    const QualityGovernor::Level& q = QualityGovernor::level(level);
+    appliedQuality_ = level;
+    supersampling_ = std::max(baseSupersampling_ - q.ssaaDrop, 1);
+    renderWidth_ = std::max(static_cast<int>(std::lround(static_cast<float>(imageWidth_) * q.renderScale)), 1);
+    renderHeight_ = std::max(static_cast<int>(std::lround(static_cast<float>(imageHeight_) * q.renderScale)), 1);
+    framebuffer_.resize(renderWidth_ * supersampling_, renderHeight_ * supersampling_);
 }
 
 void Viewer::drawFrame() {
@@ -183,7 +209,14 @@ void Viewer::drawFrame() {
         accel_.refresh(model_);  // the boxes follow the pose; trees are rebuilt only if someone clicks
     }
 
+    // Full quality for a picture that will be looked at; whatever the
+    // governor has settled on for one that will be replaced in a moment.
+    const int quality = moving_ ? governor_.current() : 0;
+    if (quality != appliedQuality_) applyQuality(quality);
+    const QualityGovernor::Level& level = QualityGovernor::level(quality);
+
     RenderSettings settings = frameSettings();
+    settings.lodTolerance = lodTolerance_ * level.lodScale * static_cast<float>(supersampling_);
     settings.wireframe = settings_.wireframe || backend_->wantsWireframe();
     // Lines need to survive the supersampling resolve, so scale them with it.
     settings.wireWidth = static_cast<float>(supersampling_);
@@ -194,10 +227,15 @@ void Viewer::drawFrame() {
 
     const auto presentStart = Clock::now();
     ImageView view = viewOf(framebuffer_);
-    if (supersampling_ > 1 || settings.post.fxaa) {
+    const bool enlarged = renderWidth_ != imageWidth_ || renderHeight_ != imageHeight_;
+    if (supersampling_ > 1 || settings.post.fxaa || enlarged) {
         resolve(framebuffer_, supersampling_, resolved_, pool_);
         if (settings.post.fxaa) applyFxaa(resolved_, pool_);
         view = resolved_.view();
+        if (enlarged) {
+            upscale(resolved_, imageWidth_, imageHeight_, scaled_, pool_);
+            view = scaled_.view();
+        }
     }
 
     std::string out;
@@ -209,6 +247,10 @@ void Viewer::drawFrame() {
     terminal_.write(out);
     bytesLastFrame_ = out.size();
     presentMs_ = std::chrono::duration<double, std::milli>(Clock::now() - presentStart).count();
+    // Tell the governor how this frame did against the target frame rate.
+    if (moving_ && options_.targetFps > 0)
+        governor_.frame(std::chrono::duration<double, std::milli>(Clock::now() - now).count(),
+                        1000.0 / options_.targetFps, baseSupersampling_);
 
     // Frame rate, averaged over half-second windows so it is readable.
     ++framesSinceFpsUpdate_;
@@ -265,7 +307,9 @@ void Viewer::drawStatusBar(std::string& out) {
         const std::string tris = formatCount(model_.triangleCount()) + " tris";
         const std::string candidates[] = {
             name + " | " + tris + " | " + shading + clip + " | " + target +
-                (supersampling_ > 1 ? " ssaa" + std::to_string(supersampling_) : "") + " | " + fps + " | " + timing,
+                (supersampling_ > 1 ? " ssaa" + std::to_string(supersampling_) : "") +
+                // Shown while detail is being traded for frame rate.
+                (appliedQuality_ > 0 ? " q-" + std::to_string(appliedQuality_) : "") + " | " + fps + " | " + timing,
             name + " | " + tris + " | " + shading + clip + " | " + target + " | " + fps,
             name + " | " + shading + clip + " | " + fps,
             name + clipShort + " | " + fps,
@@ -700,6 +744,18 @@ int Viewer::run() {
     while (running_ && !Terminal::quitRequested()) {
         const bool playing = player_ && (player_->playing() || player_->fading());
         const bool animating = ((autoRotate_ && !dragging_) || playing) && !showHelp_;
+
+        // "Moving" decides between a quick frame and a full-quality one.
+        // When the motion stops, draw once more at full quality.
+        const bool moving = animating || dragging_;
+        if (moving_ && !moving && appliedQuality_ > 0) dirty_ = true;
+        moving_ = moving;
+
+        // Levels of detail built in the background arrive here.
+        if (pendingLods_.valid() && pendingLods_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            accel_.setLods(pendingLods_.get());
+            dirty_ = true;
+        }
         const auto nextFrame = lastFrameTime_ + frameInterval;
 
         // Sleep in read(): until the next frame is due if something is

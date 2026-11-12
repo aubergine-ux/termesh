@@ -66,7 +66,40 @@ jobs:
           "$bin" --demo knot --print --backend braille --dither ordered --color none --cols 60 --rows 20
           "$bin" --demo sphere --print --backend halfblock --color 256 --dither fs --cols 40 --rows 12
           test -s pbr.png && test -s toon.png
+          "$bin" --demo knot --lod 1 --png lod.png --size 320x240
+          "$bin" --benchmark --frames 2 --benchmark-json bench.json
+          test -s lod.png && test -s bench.json
           test -s knot.png && test -s cube.gif && test -s tentacle.png && test -s tentacle.gif
+
+  # Catch performance regressions: build this commit and the one before it,
+  # and compare the instructions each benchmark scene executes.
+  performance:
+    name: Performance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Build this commit
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DTERMESH_BUILD_TESTS=OFF
+          cmake --build build --parallel
+      - name: Build the commit before
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            git worktree add ../base "$base"
+            cmake -S ../base -B ../base/build -DCMAKE_BUILD_TYPE=Release -DTERMESH_BUILD_TESTS=OFF
+            cmake --build ../base/build --parallel
+          else
+            echo "nothing to compare against"
+          fi
+      - name: Compare
+        run: |
+          if git log -1 --pretty=%B | grep -qF '[perf-ok]'; then export PERF_ALLOW=1; fi
+          scripts/perf-check.sh build/termesh ../base/build/termesh
 
   sanitizers:
     name: Linux (ASan + UBSan)
@@ -93,3 +126,6 @@ jobs:
           build/termesh --demo knot --print --backend sixel --dither fs --cols 30 --rows 10 > /dev/null
           build/termesh --demo knot --print --backend braille --dither fs --cols 30 --rows 10 > /dev/null
           build/termesh --demo sphere --print --backend ascii --dither ordered --color 256 --cols 30 --rows 10 > /dev/null
+          build/termesh --demo knot --lod 2 --shadows --png lod.png --size 200x150
+          build/termesh --demo tentacle --lod 2 --gif lod.gif --size 120x90 --frames 4
+          build/termesh --benchmark --frames 2 > /dev/null

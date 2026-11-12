@@ -25,6 +25,10 @@ interpolation, the fill rule) carry long comments in the code itself.
 - [15. Environment lighting and skyboxes](#15-environment-lighting-and-skyboxes)
 - [16. Post-processing](#16-post-processing)
 - [17. Dithering](#17-dithering)
+- [18. The BVH: culling and picking](#18-the-bvh-culling-and-picking)
+- [19. Level of detail](#19-level-of-detail)
+- [20. Holding a frame rate](#20-holding-a-frame-rate)
+- [21. Benchmarks and performance regressions](#21-benchmarks-and-performance-regressions)
 - [Performance notes](#performance-notes)
 - [Testing](#testing)
 
@@ -65,6 +69,7 @@ C++ operating on arrays of floats and bytes.
 | `src/anim/`      | Keyframe sampling, pose blending, skinning and morph targets, the timeline.      |
 | `src/pipeline/`  | The renderer: vertex stage, clipping, triangle setup, shading models, shadows, resolve. |
 | `src/post/`      | Post-processing: sky, SSAO, outlines, bloom, tone mapping, FXAA.                 |
+| `src/accel/`     | BVH, frustum culling, ray picking, mesh simplification for level of detail.      |
 | `src/raster/`    | The triangle and line rasterizer and the SIMD wrappers it uses.                  |
 | `src/output/`    | Terminal backends and the cell-diffing writer.                                   |
 | `src/input/`     | Raw terminal access (POSIX / Windows) and the input parser.                      |
@@ -879,11 +884,183 @@ right.
 Background pixels never take part, so the empty area around a model stays
 perfectly flat.
 
+## 18. The BVH: culling and picking
+
+`src/accel/bvh.hpp` · `bvh.cpp` · `model_accel.hpp`
+
+Two questions the rasterizer cannot answer cheaply: *which triangles can the
+camera see?* and *which triangle is under the mouse?* Both are searches, and a
+**bounding volume hierarchy** turns them from "test every triangle" into "test
+a few boxes". Triangles are grouped into a tree of axis-aligned boxes: the
+root holds them all, each child holds part, down to leaves of at most four. If
+a box is missed, everything in it is dismissed with one test.
+
+### Building it
+
+Start with all triangles in one node and split recursively. Where to split
+decides how good the tree is. The **surface area heuristic** scores a split by
+
+```
+area(left box) · count(left)  +  area(right box) · count(right)
+```
+
+because the chance of a random ray entering a box is proportional to its
+surface area, and the work once inside is proportional to its triangle count.
+Trying every split would be slow, so each node sorts its triangles into twelve
+bins along each axis by centroid and only the eleven boundaries between bins
+are scored. Children are stored side by side, so a node needs one index.
+
+### Frustum culling
+
+The six planes of the view volume come straight out of the view-projection
+matrix: a point is visible when `-w ≤ x ≤ w`, and "`w + x ≥ 0`" is the dot
+product of the point with (row 3 + row 0) of the matrix. Given the
+model-view-projection matrix, the planes arrive in model space, where the BVH
+lives. A box is tested against each plane using only its corner furthest
+along the plane's normal.
+
+- A mesh whose box is **outside** is skipped before any vertex is touched.
+- One that is **inside** needs no further tests.
+- One that **straddles** the edge walks its BVH, which marks the triangles
+  that could be visible in a bitmap *indexed in the mesh's own order*. The
+  primitive setup loop then skips unmarked triangles - still visiting the
+  rest in their original order, so the picture is bit-for-bit the same with
+  culling as without. (A unit test renders both ways and compares.)
+
+The saving is real but modest, because the per-triangle clip test that would
+have rejected those triangles anyway is cheap; the big win is the meshes that
+never reach the vertex stage. Shadow passes cull against the light's frustum
+the same way.
+
+### Picking
+
+A click becomes a ray: the clicked point on the near plane and on the far
+plane are run backwards through the projection, and the ray joins them. For
+each model the ray is moved into model space (one matrix inverse, instead of
+transforming every vertex out), tested against each mesh's box with the
+*slab* method, and then walked down that mesh's BVH. Triangles are tested
+with Möller-Trumbore - write the hit point as `origin + t·direction` and as
+`a + u·(b − a) + v·(c − a)`, and solve the 3×3 system. Once a hit is found
+the search distance shrinks to it, so most of the tree is never visited.
+
+For an animated model the boxes are refreshed every frame (cheap) but the
+trees only when a click actually needs them.
+
+## 19. Level of detail
+
+`src/accel/simplify.hpp` · `simplify.cpp`
+
+A 100,000-triangle model in a 160×100 terminal has several triangles per
+pixel. Level of detail keeps a few progressively coarser versions of each mesh
+and draws the coarsest one whose error would be invisible.
+
+### Simplifying a mesh
+
+The coarser versions are made by **edge collapse**: slide one end of an edge
+onto the other and the two triangles that shared it vanish. Repeat, always
+taking the collapse that changes the shape least.
+
+"Least" is measured with **quadric error metrics**. Every vertex starts out
+lying on the planes of the triangles around it; after some collapses it stands
+in for several original vertices, and the damage is the sum of its squared
+distances to all the planes it has inherited. Squared distance to a plane is
+a quadratic in the point, and a sum of quadratics is a quadratic - ten numbers
+per vertex, however many planes went in. Merging two vertices adds their
+quadrics; evaluating the sum at the surviving position is the cost.
+
+Three safeguards:
+
+- **Borders.** Sliding along the surface off an open edge costs nothing by
+  the plane measure, so each border edge adds a plane standing on it at right
+  angles to its triangle.
+- **Seams.** Where the texture mapping has a seam, a mesh has several
+  vertices at one position. They are grouped into a *site* and move together.
+  A collapse is refused if it would land two of a site's vertices on the same
+  target vertex - that would stitch the two sides of the seam together and
+  smear the texture across it.
+- **Flips.** A collapse that would turn a neighbouring triangle over is
+  refused.
+
+A vertex is always moved onto an *existing* vertex, so a simplified mesh uses
+a subset of the original vertices: **a level of detail is just a shorter index
+list.** Skinning and morph targets, which work on vertices, apply to every
+level for free.
+
+Candidates sit in a priority queue. Rather than remove entries when a collapse
+invalidates them, every site carries a version number and stale entries are
+recognised and dropped when they reach the top.
+
+### Choosing a level
+
+Each level records its error: the largest root-mean-square distance, in the
+mesh's units, between a moved vertex and the planes it stands for. Per frame
+that is projected to pixels at the nearest point of the mesh,
+
+```
+error in pixels = error · (framebuffer height / 2) · cot(fov / 2) / distance
+```
+
+and the coarsest level under the tolerance is drawn. The choice is made once
+per frame and shared with the shadow passes, so a shadow is cast by the same
+triangles that receive it. Wireframe mode always shows the original mesh.
+
+The viewer uses a tolerance of half an output pixel by default; exports use
+the full mesh unless `--lod` is given. For a large static model the levels are
+built on a background thread so the first frame does not wait.
+
+## 20. Holding a frame rate
+
+`src/app/quality.hpp` · `Viewer::drawFrame`
+
+While something is moving, a frame is on screen for a few hundredths of a
+second and smoothness matters more than detail. The `QualityGovernor` compares
+each frame's time with the budget for `--target-fps` and moves along a ladder
+of cheaper settings, least noticeable first:
+
+```
+full quality → looser level of detail → fewer supersamples → lower resolution, enlarged
+```
+
+Six frames in a row over budget drop a rung; getting one back takes forty-five
+in a row with half the budget to spare. The asymmetry is deliberate: a rung
+restored too eagerly would be dropped again at once and the picture would
+flicker between the two. Rungs that would change nothing - a pixel backend has
+no supersampling to give up - are skipped.
+
+As soon as the motion stops, one more frame is drawn at full quality, so the
+reduced settings are only ever seen in passing.
+
+## 21. Benchmarks and performance regressions
+
+`src/app/benchmark.cpp` · `scripts/perf-check.sh` · `.github/workflows/ci.yml`
+
+`termesh --benchmark` runs a fixed set of scenes built from the demo models,
+each exercising one part of the engine along a fixed camera path. Nothing
+depends on files, the clock or the terminal, so two runs do exactly the same
+work. Each scene reports:
+
+- **counters** - triangles drawn, pixels covered, bytes of terminal output and
+  a checksum of everything produced. These are exactly reproducible (and
+  independent of the thread count); a change means the engine is doing
+  different work.
+- **times** - milliseconds per frame. Real, but noisy.
+
+Timing on a shared CI machine cannot detect a 5% slowdown: the same binary
+varies by more than that from run to run. So the CI job builds the commit and
+its parent, and runs every scene of both under valgrind's *cachegrind*, which
+simulates the program and counts the **instructions executed**. That number
+depends only on the code and its input, and repeats to within a fraction of a
+percent. Comparing against the parent commit, built in the same job with the
+same compiler, means there is no stored baseline to go stale. A scene that
+executes more than 5% more instructions fails the build; a commit that is
+slower on purpose says so with `[perf-ok]` in its message.
+
 ## Performance notes
 
 - **Work is proportional to visible pixels, not triangles.** The per-triangle
   cost (transform, outcode test, setup) is a few dozen nanoseconds; shading
-  dominates. Run `termesh model.glb --bench 300` to see the split.
+  dominates. Run `termesh model.glb --bench 300` to see the split for a model,
+  or `termesh --benchmark` for the built-in suite.
 - **Threads.** Vertex transform, triangle setup, tile rasterization and the
   resolve all go through one `parallelFor` (`src/core/thread_pool.cpp`), which
   hands out iterations from a shared atomic counter so uneven tiles balance
@@ -929,6 +1106,13 @@ perfectly flat.
   outlines on silhouettes / depth steps but not on steep planes, FXAA
   leaving straight edges alone, and environments: spherical-harmonic
   irradiance, roughness blur, rotation, `.hdr` loading, bad input.
+- `test_accel.cpp` - ray / triangle and ray / box tests, frustum
+  classification, the BVH's structure, rays agreeing with brute force,
+  culling never dropping a visible triangle, identical pictures with and
+  without it, and picking through transforms.
+- `test_lod.cpp` - every level a valid smaller mesh, borders and texture seams
+  preserved, level selection by distance and resolution, levels following an
+  animation, and the frame-rate governor's ladder.
 - `test_output.cpp` - cell diffing, each backend's encoding (the kitty and GIF
   streams are decoded again and compared), palette quantisation, and
   dithering: averages preserved, backgrounds untouched, each backend's
@@ -937,4 +1121,5 @@ perfectly flat.
 
 CI builds and runs all of it on Linux (GCC, Clang, and with SIMD disabled),
 macOS on Apple Silicon (the NEON path) and Windows (MSVC), plus an
-AddressSanitizer / UBSan job.
+AddressSanitizer / UBSan job and the [performance
+comparison](#21-benchmarks-and-performance-regressions).
