@@ -65,6 +65,7 @@ const char* const kHelpLines[] = {
     "b                          next output backend",
     "o                          status bar on / off",
     "p                          save a PNG of the view",
+    "R                          start / stop recording (.cast; see --record)",
     "?                          this help",
     "q, Esc                     quit",
     "",
@@ -187,6 +188,56 @@ void Viewer::notify(std::string message) {
     dirty_ = true;
 }
 
+// --------------------------------------------------------------- recording ---
+
+void Viewer::emit(std::string_view bytes) {
+    terminal_.write(bytes);
+    if (recorder_.active()) recorder_.terminalOutput(recordingSeconds(), bytes);
+}
+
+double Viewer::recordingSeconds() const {
+    return std::chrono::duration<double>(Clock::now() - recordingStart_).count();
+}
+
+bool Viewer::startRecording(const std::string& path) {
+    std::string error;
+    if (!recorder_.start(path, termSize_.cols, termSize_.rows, error)) {
+        notify("cannot record: " + error);
+        return false;
+    }
+    recordingStart_ = Clock::now();
+    if (begun_) {
+        // A recording of the terminal has to begin with a whole screen, not
+        // with changes to one it never saw: set the stage, then redraw.
+        recorder_.terminalOutput(0.0, kEnterScreen);
+        backend_->invalidate();
+        lastStatus_.clear();
+        helpDrawn_ = false;
+        notify("recording to " + path + " - R stops");
+    }
+    return true;
+}
+
+void Viewer::stopRecording() {
+    if (!recorder_.active()) return;
+    const double seconds = recordingSeconds();
+    // Leave a replayed recording's terminal as it was found.
+    recorder_.terminalOutput(seconds, kLeaveScreen);
+    recorder_.stop(seconds, recordingResult_);
+    if (begun_) notify(recordingResult_);
+}
+
+void Viewer::toggleRecording() {
+    if (recorder_.active()) {
+        stopRecording();
+        return;
+    }
+    // Further recordings are of the same kind as the one asked for on the
+    // command line; asciinema's if none was.
+    const RecordingFormat format = recordingFormatOf(options_.recordPath).value_or(RecordingFormat::Cast);
+    startRecording(defaultRecordingName(format));
+}
+
 // ------------------------------------------------------------------ output ---
 
 BackendKind Viewer::effectiveBackend() const {
@@ -203,7 +254,7 @@ void Viewer::rebuildBackend() {
     if (backend_) {
         std::string out;
         backend_->cleanup(out);
-        terminal_.write(out);
+        emit(out);
     }
     backend_ = makeBackend(effectiveBackend(), caps_.color);
     backend_->setDither(dither_);
@@ -239,7 +290,7 @@ void Viewer::layout() {
         --baseSupersampling_;
     applyQuality(moving_ ? governor_.current() : 0);
 
-    terminal_.write("\x1b[0m\x1b[2J");
+    emit("\x1b[0m\x1b[2J");
     backend_->invalidate();
     lastStatus_.clear();
     dirty_ = true;
@@ -292,6 +343,8 @@ void Viewer::drawFrame() {
         }
     }
 
+    if (recorder_.active()) recorder_.frame(recordingSeconds(), view, backend_->pixelAspect());
+
     std::string out;
     out.reserve(bytesLastFrame_ + 1024);
     out += kBeginFrame;
@@ -299,7 +352,7 @@ void Viewer::drawFrame() {
     drawInspector(out);
     drawStatusBar(out);
     out += kEndFrame;
-    terminal_.write(out);
+    emit(out);
     bytesLastFrame_ = out.size();
     presentMs_ = std::chrono::duration<double, std::milli>(Clock::now() - presentStart).count();
     // Tell the governor how this frame did against the target frame rate.
@@ -327,6 +380,7 @@ void Viewer::drawStatusBar(std::string& out) {
     std::string text;
     if (!message_.empty()) {
         text = " " + message_;
+        if (recorder_.active()) text = " REC" + text;
     } else {
         const std::string shading = std::string(shadingModeName(settings_.shading)) +
                                     ((settings_.wireframe || backend_->wantsWireframe()) ? " wire" : "") +
@@ -367,7 +421,7 @@ void Viewer::drawStatusBar(std::string& out) {
             clip += buf;
         }
 
-        const std::string name = " " + scene_.name;
+        const std::string name = std::string(recorder_.active() ? " REC " : " ") + scene_.name;
         // A scene of point clouds has no triangles to count.
         const std::string tris = scene_.triangleCount() ? formatCount(scene_.triangleCount()) + " tris"
                                                         : formatCount(scene_.vertexCount()) + " points";
@@ -619,6 +673,7 @@ void Viewer::handleKey(const KeyEvent& key) {
                     layout();
                     return;
                 case U'p': saveScreenshot(); return;
+                case U'R': toggleRecording(); return;
                 case U'?':
                     showHelp_ = true;
                     helpDrawn_ = false;
@@ -946,7 +1001,13 @@ bool Viewer::begin() {
     if (std::find(available_.begin(), available_.end(), baseBackend_) == available_.end())
         available_.insert(available_.begin(), baseBackend_);
 
-    terminal_.write(kEnterScreen);
+    // Before the first byte is written, so that a recording has everything.
+    if (!options_.recordPath.empty() && !startRecording(options_.recordPath)) {
+        std::fprintf(stderr, "termesh: %s\n", message_.c_str());
+        terminal_.leaveRawMode();
+        return false;
+    }
+    emit(kEnterScreen);
     rebuildBackend();
 
     lastFrameTime_ = fpsWindowStart_ = Clock::now();
@@ -1003,6 +1064,7 @@ bool Viewer::step() {
         size.pixelHeight != termSize_.pixelHeight) {
         termSize_ = size;
         resolveCellSize(termSize_, caps_);
+        if (recorder_.active()) recorder_.terminalResize(recordingSeconds(), size.cols, size.rows);
         helpDrawn_ = false;
         layout();
     }
@@ -1016,7 +1078,7 @@ bool Viewer::step() {
         if (!helpDrawn_) {
             std::string out;
             drawHelp(out);
-            terminal_.write(out);
+            emit(out);
             helpDrawn_ = true;
         }
         return true;
@@ -1032,8 +1094,15 @@ void Viewer::end() {
     std::string out;
     backend_->cleanup(out);
     out += kLeaveScreen;
-    terminal_.write(out);
+    if (recorder_.active()) {
+        // The recorder adds the closing sequence itself.
+        terminal_.write(out);
+        stopRecording();
+    } else {
+        emit(out);
+    }
     terminal_.leaveRawMode();
+    if (!recordingResult_.empty()) std::fprintf(stderr, "termesh: %s\n", recordingResult_.c_str());
 }
 
 }  // namespace termesh

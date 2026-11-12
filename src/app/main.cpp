@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "app/viewer.hpp"
 #include "export/gif.hpp"
 #include "export/offscreen.hpp"
+#include "export/recorder.hpp"
 #include "pipeline/resolve.hpp"
 #include "raster/simd.hpp"
 #include "scene/loader.hpp"
@@ -105,7 +107,7 @@ int runPng(const Options& options, Scene& scene, ThreadPool& pool) {
     return 0;
 }
 
-// --gif: a looping animation. What moves depends on the scene:
+// --gif and --mp4: a looping animation. What moves depends on the scene:
 //
 //   a camera path     the camera follows it, once round
 //   animated models   one loop of the animation, from a fixed camera
@@ -169,19 +171,35 @@ int runGif(const Options& options, Scene& scene, ThreadPool& pool) {
     }
 
     if (progress) std::fprintf(stderr, "\rencoding...                 \r");
-    const GifPalette palette = buildGifPalette(frames);
-    GifWriter writer;
-    // GIF delays are whole hundredths of a second.
-    const int delayCs = std::max((100 + options.gifFps / 2) / options.gifFps, 2);
-    bool ok = writer.open(options.gifPath, frames[0].width, frames[0].height, palette, delayCs);
-    for (const Image& frame : frames) ok = ok && writer.addFrame(frame);
-    ok = writer.close() && ok;
-    if (!ok) {
-        std::fprintf(stderr, "termesh: could not write '%s'\n", options.gifPath.c_str());
-        return 1;
+    if (!options.gifPath.empty()) {
+        const GifPalette palette = buildGifPalette(frames);
+        GifWriter writer;
+        // GIF delays are whole hundredths of a second.
+        const int delayCs = std::max((100 + options.gifFps / 2) / options.gifFps, 2);
+        bool ok = writer.open(options.gifPath, frames[0].width, frames[0].height, palette, delayCs);
+        for (const Image& frame : frames) ok = ok && writer.addFrame(frame);
+        ok = writer.close() && ok;
+        if (!ok) {
+            std::fprintf(stderr, "termesh: could not write '%s'\n", options.gifPath.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width,
+                     frames[0].height, frameCount);
     }
-    std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.gifPath.c_str(), frames[0].width, frames[0].height,
-                 frameCount);
+    if (!options.mp4Path.empty()) {
+        std::string error;
+        std::unique_ptr<VideoSink> video =
+            makeMp4Sink(options.mp4Path, frames[0].width, frames[0].height, options.gifFps, error);
+        bool ok = video != nullptr;
+        for (const Image& frame : frames) ok = ok && video->addFrame(frame);
+        ok = ok && video->close(error);
+        if (!ok) {
+            std::fprintf(stderr, "termesh: %s\n", error.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "wrote %s (%dx%d, %d frames)\n", options.mp4Path.c_str(), frames[0].width & ~1,
+                     frames[0].height & ~1, frameCount);
+    }
     return 0;
 }
 
@@ -520,11 +538,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (options.benchFrames > 0) return runBench(options, scene, pool);
-    // --png and --gif can be combined: one run writes both.
-    if (!options.pngPath.empty() || !options.gifPath.empty()) {
+    // --png, --gif and --mp4 can be combined: one run writes them all.
+    const bool video = !options.gifPath.empty() || !options.mp4Path.empty();
+    if (!options.pngPath.empty() || video) {
         int status = 0;
         if (!options.pngPath.empty()) status = runPng(options, scene, pool);
-        if (status == 0 && !options.gifPath.empty()) status = runGif(options, scene, pool);
+        if (status == 0 && video) status = runGif(options, scene, pool);
         return status;
     }
     if (options.print) return runPrint(options, scene, pool);

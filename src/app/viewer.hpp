@@ -3,10 +3,12 @@
 
 #include <chrono>
 #include <future>
+#include <string_view>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "export/recorder.hpp"
 #include "anim/player.hpp"
 #include "app/capabilities.hpp"
 #include "app/inspector.hpp"
@@ -76,6 +78,13 @@ private:
     void resetView();
     void notify(std::string message);
 
+    // --- recording ---
+    void emit(std::string_view bytes);  // to the terminal, and to a recording of it
+    void toggleRecording();
+    bool startRecording(const std::string& path);
+    void stopRecording();
+    double recordingSeconds() const;
+
     const Options& options_;
     Scene& scene_;
     ThreadPool& pool_;
@@ -119,6 +128,10 @@ private:
     std::string inputBytes_;
     std::vector<InputEvent> inputEvents_;
     bool begun_ = false;
+
+    SessionRecorder recorder_;
+    Clock::time_point recordingStart_{};
+    std::string recordingResult_;  // what the last recording came to, for after the screen is restored
 
     OrbitCamera camera_;
     // While the scene's camera path is being followed, the view comes from

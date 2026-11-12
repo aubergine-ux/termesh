@@ -89,6 +89,9 @@ struct Options {
     bool print = false;         // print one frame to the terminal and exit
     std::string pngPath;        // render one frame to a PNG and exit
     std::string gifPath;        // record a turntable animation and exit
+    std::string mp4Path;        // the same as an MP4 (needs ffmpeg)
+    // Record the interactive session from the start: a .cast, .gif or .mp4.
+    std::string recordPath;
     int width = 0, height = 0;  // image size for --png / --gif (0 = default)
     int cols = 0, rows = 0;     // terminal size override for --print
     int frames = 0;             // GIF length (0 = a full turn, or one loop of the animation)

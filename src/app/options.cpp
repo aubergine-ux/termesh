@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <string_view>
 
+#include "export/recorder.hpp"
 #include "scene/primitives.hpp"
 
 namespace termesh {
@@ -95,9 +96,12 @@ std::string usageText() {
                        "      --png <file>       render the view to a PNG and exit\n"
                        "      --gif <file>       record a looping GIF and exit: a 360-degree turntable, or\n"
                        "                         one loop of the animation (add --spin to turn it as well)\n"
-                       "      --size <WxH>       image size for --png / --gif\n"
-                       "      --frames <n>       frames in the GIF (default: 72, or one animation loop)\n"
-                       "      --gif-fps <n>      GIF playback rate (default: 24)\n"
+                       "      --mp4 <file>       the same as an MP4 video (needs ffmpeg installed)\n"
+                       "      --size <WxH>       image size for --png / --gif / --mp4\n"
+                       "      --frames <n>       frames in the GIF or MP4 (default: 72, or one animation loop)\n"
+                       "      --gif-fps <n>      GIF / MP4 playback rate (default: 24)\n"
+                       "      --record <file>    record the interactive session from the start: .cast (asciinema),\n"
+                       "                         .gif or .mp4. In the viewer, R starts and stops a recording\n"
                        "      --blocks <n>       draw each pixel as an n x n block, like terminal cells\n"
                        "      --bench <n>        render n frames off-screen and print timings\n"
                        "\n"
@@ -551,6 +555,16 @@ ParseResult parseOptions(int argc, const char* const* argv, const Options& defau
             if (!needValue()) return missing();
             if (value.empty()) return invalid();
             o.gifPath = std::string(value);
+        } else if (name == "--mp4") {
+            if (!needValue()) return missing();
+            if (value.empty()) return invalid();
+            o.mp4Path = std::string(value);
+        } else if (name == "--record") {
+            if (!needValue()) return missing();
+            if (value.empty() || !recordingFormatOf(std::string(value))) {
+                return fail("--record needs a file name ending in .cast, .gif or .mp4");
+            }
+            o.recordPath = std::string(value);
         } else if (name == "--size") {
             if (!needValue()) return missing();
             const std::size_t x = value.find_first_of("xX");

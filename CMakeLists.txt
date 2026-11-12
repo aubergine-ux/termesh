@@ -96,6 +96,7 @@ add_library(termesh_core OBJECT
     src/core/thread_pool.cpp
     src/export/gif.cpp
     src/export/offscreen.cpp
+    src/export/recorder.cpp
     src/input/events.cpp
     ${TERMESH_TERMINAL_SOURCE}
     src/output/cell_backends.cpp
@@ -315,6 +316,7 @@ if(TERMESH_BUILD_TESTS)
         tests/test_output.cpp
         tests/test_post.cpp
         tests/test_raster.cpp
+        tests/test_record.cpp
         tests/test_render.cpp
         tests/test_scene.cpp
         tests/test_stage.cpp
