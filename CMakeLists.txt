@@ -97,9 +97,13 @@ if(TERMESH_BUILD_TESTS)
     enable_testing()
     add_executable(termesh_tests
         tests/test_main.cpp
+        tests/test_app.cpp
         tests/test_clip.cpp
+        tests/test_input.cpp
         tests/test_math.cpp
+        tests/test_output.cpp
         tests/test_raster.cpp
+        tests/test_scene.cpp
     )
     target_link_libraries(termesh_tests PRIVATE termesh_core termesh_warnings)
     add_test(NAME termesh_tests COMMAND termesh_tests)
