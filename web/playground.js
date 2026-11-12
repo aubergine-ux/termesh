@@ -32,15 +32,18 @@
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(document.getElementById("terminal"));
-    try {
-        // Draws block characters itself, edge to edge, so half-block
-        // "pixels" meet without seams. Falls back to the DOM if WebGL is
-        // unavailable.
-        const webgl = new WebglAddon.WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        term.loadAddon(webgl);
-    } catch (error) {
-        console.warn("termesh: WebGL renderer unavailable, using the DOM renderer", error);
+    // The WebGL renderer draws block characters itself, edge to edge, so
+    // half-block "pixels" meet without seams. Without WebGL (or with ?dom
+    // on the address, for a browser where it misbehaves) xterm.js falls
+    // back to ordinary page elements.
+    if (!new URLSearchParams(location.search).has("dom")) {
+        try {
+            const webgl = new WebglAddon.WebglAddon();
+            webgl.onContextLoss(() => webgl.dispose());
+            term.loadAddon(webgl);
+        } catch (error) {
+            console.warn("termesh: WebGL renderer unavailable, using the DOM renderer", error);
+        }
     }
 
     // What the program sees of the terminal (see src/input/terminal_wasm.cpp).
