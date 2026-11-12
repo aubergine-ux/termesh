@@ -8,3 +8,8 @@
 .vscode/
 .idea/
 .cache/
+__pycache__/
+*.egg-info/
+/dist/
+/wheelhouse/
+.pytest_cache/
