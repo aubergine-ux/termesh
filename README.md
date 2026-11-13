@@ -16,7 +16,7 @@ No OpenGL, no GPU, no dependencies to install. Just text.
 [![License](https://img.shields.io/badge/license-MIT-06b6d4?style=flat-square)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599c?style=flat-square&logo=cplusplus&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![WebAssembly](https://img.shields.io/badge/wasm-playground-654ff0?style=flat-square&logo=webassembly&logoColor=white)
+[![Playground](https://img.shields.io/badge/wasm-playground-654ff0?style=flat-square&logo=webassembly&logoColor=white)](https://aubergine-ux.github.io/termesh/)
 ![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-475569?style=flat-square)
 
 [Features](#-features) · [Install](#-install) · [Usage](#-usage) · [Rendering](#-rendering) · [Integrations](#-integrations) · [How it works](#-how-it-works) · [Architecture](ARCHITECTURE.md)
@@ -422,8 +422,8 @@ mkdir site && cp web/*.html web/*.css web/*.js build-wasm/termesh-web.* site/
 python3 -m http.server -d site          # then open http://localhost:8000
 ```
 
-The [`Playground`](.github/workflows/pages.yml) workflow builds this on every push and publishes it to GitHub
-Pages when Pages is enabled for the repository.
+**[Try it in your browser →](https://aubergine-ux.github.io/termesh/)** The
+[`Playground`](.github/workflows/pages.yml) workflow rebuilds and publishes the page on every push.
 
 ## 🔧 How it works
 
